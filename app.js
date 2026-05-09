@@ -1312,7 +1312,7 @@ function renderDecksList() {
 }
 
 // --- Build form ---
-let deckFormState = { format: 'commander', vibe: 'auto' };
+let deckFormState = { format: 'casual60', vibe: 'auto' };
 
 function openDeckForm() {
   // Populate commander dropdown from owned legendary creatures
@@ -1324,12 +1324,12 @@ function openDeckForm() {
   } else {
     sel.innerHTML = owned.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${c.set.toUpperCase()} #${c.collector_number}</option>`).join('');
   }
-  // Default state
-  deckFormState = { format: 'commander', vibe: 'auto' };
-  document.querySelectorAll('#formatOpts button').forEach(b => b.classList.toggle('on', b.dataset.format === 'commander'));
+  // Default state — Casual 60 (the format the household actually plays)
+  deckFormState = { format: 'casual60', vibe: 'auto' };
+  document.querySelectorAll('#formatOpts button').forEach(b => b.classList.toggle('on', b.dataset.format === 'casual60'));
   document.querySelectorAll('#vibeOpts button').forEach(b => b.classList.toggle('on', b.dataset.vibe === 'auto'));
   document.getElementById('themeInput').value = '';
-  document.getElementById('commanderSection').classList.remove('hidden');
+  document.getElementById('commanderSection').classList.add('hidden');
   showSheet(deckFormSheet);
 }
 
