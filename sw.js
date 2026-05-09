@@ -1,6 +1,9 @@
 // Service worker — caches app shell + card data for offline use.
 // Card images are cached on demand from Scryfall CDN.
-const VERSION = 'v1';
+//
+// IMPORTANT: bump VERSION any time the app shell or app.js changes substantially.
+// Otherwise old clients keep serving the cached version forever.
+const VERSION = 'v3';
 const CORE = `mtg-avatar-core-${VERSION}`;
 const IMAGES = `mtg-avatar-images-${VERSION}`;
 
@@ -32,6 +35,10 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
+  // NEVER cache API requests — they're authenticated, dynamic, and short-lived.
+  // Same for WebSocket upgrades (the SW shouldn't intercept those anyway, but be safe).
+  if (url.pathname.startsWith('/api/')) return;
+
   // Scryfall card images — cache on demand, serve from cache when offline
   if (url.hostname.endsWith('scryfall.io') || url.hostname.endsWith('scryfall.com')) {
     event.respondWith(
@@ -50,11 +57,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell — cache-first
+  // App shell — network-first for HTML/JS so updates land fast,
+  // cache-first for everything else.
   if (url.origin === location.origin) {
+    const isShell = req.url.endsWith('/') || req.url.endsWith('index.html') ||
+                    req.url.endsWith('app.js') || req.url.endsWith('manifest.json');
+
+    if (isShell) {
+      event.respondWith(
+        fetch(req).then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CORE).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        }).catch(() => caches.match(req))
+      );
+      return;
+    }
+
     event.respondWith(
       caches.match(req).then((cached) => cached || fetch(req).then((res) => {
-        if (res.ok && CORE_ASSETS.some((a) => req.url.endsWith(a) || req.url.endsWith('/'))) {
+        if (res.ok && CORE_ASSETS.some((a) => req.url.endsWith(a))) {
           const copy = res.clone();
           caches.open(CORE).then((cache) => cache.put(req, copy));
         }
