@@ -1,8 +1,44 @@
 // MTG Avatar Set Tracker
 'use strict';
 
-const STORAGE_KEY = 'mtg-avatar-collection-v1';
+const STORAGE_KEY = 'mtg-avatar-collection-v2';
 const PREFS_KEY = 'mtg-avatar-prefs-v1';
+const PASSWORD_KEY = 'mtg-avatar-pwd-v1';
+const VERSION_KEY = 'mtg-avatar-version-v1';
+
+// ============================================================
+// Auth + API client
+// ============================================================
+function getPassword() { return localStorage.getItem(PASSWORD_KEY) || ''; }
+function setPassword(pw) { localStorage.setItem(PASSWORD_KEY, pw); }
+function clearPassword() { localStorage.removeItem(PASSWORD_KEY); }
+
+async function apiFetch(path, opts = {}) {
+  const headers = new Headers(opts.headers || {});
+  if (opts.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (path !== '/api/auth') headers.set('X-App-Password', getPassword());
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401) {
+    clearPassword();
+    showLoginScreen('Session expired. Please sign in again.');
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const j = await res.json(); msg = j.error || j.detail || msg; } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+async function checkAuth(pw) {
+  const r = await fetch('/api/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  });
+  return r.ok;
+}
 
 const SET_ORDER = ['tla', 'tle', 'ptla', 'jtla', 'atla', 'atle', 'ttla', 'ttle', 'ftla'];
 const SET_NAMES = {
@@ -21,8 +57,11 @@ const RARITY_RANK = { common: 0, uncommon: 1, rare: 2, mythic: 3, special: 4, bo
 
 // ----- State -----
 let CARDS = [];
-let collection = loadCollection();
+let collection = loadCollectionCache();
 let prefs = loadPrefs();
+let serverVersion = parseInt(localStorage.getItem(VERSION_KEY)) || 0;
+let pendingPatches = 0; // counter for in-flight saves
+let lastServerSync = null;
 
 const filters = {
   q: '',
@@ -33,13 +72,14 @@ const filters = {
   sort: 'set',
 };
 
-// ----- Storage -----
-function loadCollection() {
+// ----- Storage (server-backed, with localStorage cache) -----
+function loadCollectionCache() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
   catch { return {}; }
 }
-function saveCollection() {
+function saveCollectionCache() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(collection));
+  localStorage.setItem(VERSION_KEY, String(serverVersion));
 }
 function loadPrefs() {
   try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || { showStats: true }; }
@@ -49,19 +89,71 @@ function savePrefs() {
   localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
 }
 
+async function syncFromServer() {
+  setSyncStatus('Syncing…', false);
+  try {
+    const data = await apiFetch('/api/collection', { method: 'GET' });
+    collection = data.collection || {};
+    serverVersion = data.version || 0;
+    lastServerSync = new Date();
+    saveCollectionCache();
+    renderGrid();
+    setSyncStatus('Synced', false);
+    setTimeout(() => hideSyncStatus(), 1500);
+    return true;
+  } catch (e) {
+    setSyncStatus('Offline · cached', true);
+    return false;
+  }
+}
+
 function getEntry(id) {
   return collection[id] || { n: 0, f: 0, e: 0, w: false, note: '' };
 }
+
+// Optimistic local update + async PATCH to server.
 function setEntry(id, updates) {
   const cur = getEntry(id);
   const next = { ...cur, ...updates };
-  if (!next.n && !next.f && !next.e && !next.w && !next.note) {
-    delete collection[id];
-  } else {
-    collection[id] = next;
-  }
-  saveCollection();
+  const empty = !next.n && !next.f && !next.e && !next.w && !next.note;
+  if (empty) delete collection[id]; else collection[id] = next;
+  saveCollectionCache();
+  pushEntry(id, empty ? null : next);
 }
+
+async function pushEntry(id, entry) {
+  pendingPatches++;
+  setSyncStatus('Saving…', false);
+  try {
+    const r = await apiFetch('/api/collection', {
+      method: 'PATCH',
+      body: JSON.stringify({ id, entry }),
+    });
+    if (r?.version) { serverVersion = r.version; localStorage.setItem(VERSION_KEY, String(serverVersion)); }
+    lastServerSync = new Date();
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      setSyncStatus('Offline · changes saved locally', true);
+    }
+    return;
+  } finally {
+    pendingPatches--;
+    if (pendingPatches === 0) {
+      setSyncStatus('Saved', false);
+      setTimeout(() => hideSyncStatus(), 1200);
+    }
+  }
+}
+
+const syncEl = () => document.getElementById('syncIndicator');
+const syncTextEl = () => document.getElementById('syncText');
+function setSyncStatus(text, isError) {
+  const el = syncEl(); if (!el) return;
+  el.classList.remove('hidden');
+  el.classList.toggle('error', !!isError);
+  syncTextEl().textContent = text;
+}
+function hideSyncStatus() { const el = syncEl(); if (el) el.classList.add('hidden'); }
 
 // ----- Helpers -----
 function colorBucket(card) {
@@ -570,12 +662,26 @@ document.getElementById('importFile').addEventListener('change', async (ev) => {
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    const incoming = data.collection || data; // tolerate raw collection objects
+    const incoming = data.collection || data;
     if (typeof incoming !== 'object') throw new Error('Bad format');
-    const ok = confirm(`Import ${Object.keys(incoming).length} entries? This replaces your current collection.`);
+    const ok = confirm(`Import ${Object.keys(incoming).length} entries? This replaces the shared collection on the server.`);
     if (!ok) return;
-    collection = incoming; saveCollection();
-    renderGrid(); toast('Import complete');
+    collection = incoming;
+    saveCollectionCache();
+    renderGrid();
+    setSyncStatus('Uploading import…', false);
+    try {
+      await apiFetch('/api/collection', {
+        method: 'PUT',
+        body: JSON.stringify({ collection }),
+      });
+      toast('Import complete (synced)');
+      setSyncStatus('Saved', false);
+      setTimeout(hideSyncStatus, 1500);
+    } catch (e) {
+      toast('Imported locally — server sync failed: ' + e.message);
+      setSyncStatus('Offline · changes local only', true);
+    }
     hideSheets();
   } catch (e) {
     alert('Import failed: ' + e.message);
@@ -583,10 +689,16 @@ document.getElementById('importFile').addEventListener('change', async (ev) => {
   ev.target.value = '';
 });
 
-document.getElementById('clearAll').addEventListener('click', () => {
-  if (!confirm('Reset everything? This deletes all your collection data and cannot be undone.')) return;
-  collection = {}; saveCollection();
-  renderGrid(); toast('Collection cleared'); hideSheets();
+document.getElementById('clearAll').addEventListener('click', async () => {
+  if (!confirm('Reset everything? This wipes the shared collection on the server. Cannot be undone.')) return;
+  collection = {}; saveCollectionCache(); renderGrid();
+  try {
+    await apiFetch('/api/collection', { method: 'DELETE' });
+    toast('Collection cleared');
+  } catch (e) {
+    toast('Cleared locally; server reset failed: ' + e.message);
+  }
+  hideSheets();
 });
 
 // ----- Search -----
@@ -607,6 +719,66 @@ function toast(msg) {
   toastT = setTimeout(() => el.classList.remove('show'), 1600);
 }
 
+// ============================================================
+// Login screen
+// ============================================================
+function showLoginScreen(errMsg) {
+  const screen = document.getElementById('loginScreen');
+  const err = document.getElementById('loginError');
+  err.textContent = errMsg || '';
+  screen.classList.remove('hidden');
+  // Focus password input
+  setTimeout(() => document.getElementById('loginPwd').focus(), 50);
+}
+function hideLoginScreen() {
+  document.getElementById('loginScreen').classList.add('hidden');
+}
+
+document.getElementById('loginSubmit').addEventListener('click', submitLogin);
+document.getElementById('loginPwd').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitLogin();
+});
+
+async function submitLogin() {
+  const pwd = document.getElementById('loginPwd').value.trim();
+  const err = document.getElementById('loginError');
+  if (!pwd) { err.textContent = 'Enter the password.'; return; }
+  err.textContent = '';
+  document.getElementById('loginSubmit').disabled = true;
+  try {
+    const ok = await checkAuth(pwd);
+    if (!ok) { err.textContent = 'Wrong password.'; return; }
+    setPassword(pwd);
+    hideLoginScreen();
+    // Initial sync after login
+    await syncFromServer();
+  } catch (e) {
+    err.textContent = 'Network error: ' + e.message;
+  } finally {
+    document.getElementById('loginSubmit').disabled = false;
+    document.getElementById('loginPwd').value = '';
+  }
+}
+
+// ============================================================
+// Periodic background sync — picks up partner's changes.
+// ============================================================
+const SYNC_INTERVAL_MS = 30000;
+let syncTimer = null;
+function startBackgroundSync() {
+  if (syncTimer) return;
+  syncTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && getPassword() && pendingPatches === 0) {
+      syncFromServer();
+    }
+  }, SYNC_INTERVAL_MS);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && getPassword() && pendingPatches === 0) {
+    syncFromServer();
+  }
+});
+
 // ----- Boot -----
 async function boot() {
   try {
@@ -615,6 +787,21 @@ async function boot() {
     buildSheet();
     renderGrid();
     document.getElementById('loading').style.display = 'none';
+
+    // Auth gate
+    if (!getPassword()) {
+      showLoginScreen();
+    } else {
+      // Verify session and pull latest server state
+      const ok = await checkAuth(getPassword());
+      if (!ok) {
+        clearPassword();
+        showLoginScreen('Session expired. Please sign in again.');
+      } else {
+        await syncFromServer();
+      }
+    }
+    startBackgroundSync();
   } catch (e) {
     document.getElementById('loading').innerHTML = `<div style="color:var(--red);padding:20px;text-align:center;">Failed to load cards.json<br><small>${escapeHtml(e.message)}</small></div>`;
   }
@@ -622,79 +809,51 @@ async function boot() {
 boot();
 
 // ============================================================
-// Settings & Gemini API
+// Settings (server-backed)
 // ============================================================
-const SETTINGS_KEY = 'mtg-avatar-settings-v1';
-let settings = loadSettings();
-
-function loadSettings() {
-  try {
-    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
-    return { apiKey: '', model: 'gemini-2.5-flash', ...s };
-  } catch { return { apiKey: '', model: 'gemini-2.5-flash' }; }
-}
-function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
-function hasApiKey() { return !!(settings.apiKey || '').trim(); }
-
 const settingsSheet = document.getElementById('settingsSheet');
 document.getElementById('settingsBtn').addEventListener('click', () => {
   hideSheets();
-  document.getElementById('apiKeyInput').value = settings.apiKey || '';
-  document.getElementById('modelSelect').value = settings.model;
   document.getElementById('testResult').textContent = '';
+  document.getElementById('lastSyncResult').textContent = lastServerSync
+    ? 'Last sync: ' + lastServerSync.toLocaleTimeString()
+    : '';
   showSheet(settingsSheet);
 });
 document.getElementById('closeSettings').addEventListener('click', hideSheets);
-document.getElementById('saveSettings').addEventListener('click', () => {
-  settings.apiKey = document.getElementById('apiKeyInput').value.trim();
-  settings.model = document.getElementById('modelSelect').value;
-  saveSettings();
-  hideSheets();
-  toast(hasApiKey() ? 'Settings saved' : 'Saved (no API key set)');
-});
 
 document.getElementById('testApiKey').addEventListener('click', async () => {
   const result = document.getElementById('testResult');
-  const key = document.getElementById('apiKeyInput').value.trim();
-  const model = document.getElementById('modelSelect').value;
-  if (!key) { result.textContent = '⚠ enter a key first'; return; }
   result.textContent = 'Testing…';
   try {
-    const r = await geminiCall({ apiKey: key, model, prompt: 'Reply with the single word OK.' });
-    result.textContent = (r || '').toLowerCase().includes('ok') ? '✓ working' : '⚠ unexpected: ' + r.slice(0, 40);
+    // Fire a tiny explain on a known card to verify the AI proxy works.
+    const card = CARDS[0];
+    const r = await apiFetch('/api/explain', {
+      method: 'POST',
+      body: JSON.stringify({ card, followup: 'Reply with the single word OK.' }),
+    });
+    const t = r.text || '';
+    result.textContent = t.toLowerCase().includes('ok') ? '✓ working' : '⚠ unexpected: ' + t.slice(0, 40);
   } catch (e) {
     result.textContent = '✗ ' + e.message;
   }
 });
 
-async function geminiCall({ apiKey, model, prompt, imageBase64, imageMime, jsonMode }) {
-  apiKey = apiKey || settings.apiKey;
-  model = model || settings.model;
-  if (!apiKey) throw new Error('No API key set');
+document.getElementById('forceSync').addEventListener('click', async () => {
+  const result = document.getElementById('lastSyncResult');
+  result.textContent = 'Syncing…';
+  const ok = await syncFromServer();
+  result.textContent = ok
+    ? 'Synced ' + new Date().toLocaleTimeString()
+    : '✗ sync failed';
+});
 
-  const parts = [{ text: prompt }];
-  if (imageBase64) parts.push({ inline_data: { mime_type: imageMime || 'image/jpeg', data: imageBase64 } });
-
-  const body = {
-    contents: [{ role: 'user', parts }],
-    generationConfig: jsonMode ? { responseMimeType: 'application/json' } : {},
-  };
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { const j = await res.json(); msg = j.error?.message || msg; } catch {}
-    throw new Error(msg);
-  }
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('\n') || '';
-  return text;
-}
+document.getElementById('signOut').addEventListener('click', () => {
+  if (!confirm('Sign out? You will need to enter the password again.')) return;
+  clearPassword();
+  hideSheets();
+  showLoginScreen();
+});
 
 // ============================================================
 // Camera scan
@@ -714,8 +873,9 @@ document.getElementById('scanClose').addEventListener('click', closeScan);
 scanShoot.addEventListener('click', captureAndIdentify);
 
 async function openScan() {
-  if (!hasApiKey()) {
-    toast('Add a Gemini API key first (More → AI Settings)');
+  if (!getPassword()) {
+    toast('Sign in first');
+    showLoginScreen();
     return;
   }
   scanResult.classList.add('hidden');
@@ -759,7 +919,7 @@ function captureFrameAsJpeg(maxDim = 1280, quality = 0.85) {
 }
 
 async function captureAndIdentify() {
-  if (!hasApiKey()) { toast('Set Gemini API key in Settings'); return; }
+  if (!getPassword()) { toast('Sign in first'); showLoginScreen(); return; }
   scanShoot.disabled = true;
   scanResult.classList.add('hidden');
   scanBusy.classList.remove('hidden');
@@ -777,29 +937,12 @@ async function captureAndIdentify() {
   }
 }
 
-const IDENTIFY_PROMPT = `You are looking at a Magic: The Gathering card from the "Avatar: The Last Airbender" Universes Beyond release.
-
-Read the card and return ONLY a JSON object with these keys:
-- name: the card's printed title (string)
-- set_code: the 3-4 letter set code shown at the bottom of the card. Possible values: "TLA", "TLE", "PTLA", "JTLA", "ATLA", "ATLE", "TTLA", "TTLE", "FTLA". Return uppercase. Use null if you can't read it.
-- collector_number: the printed collector number from the bottom of the card (e.g. "0123/394" → return "123"). Just the number portion as a string, leading zeros stripped. Use null if unreadable.
-- treatment: brief description of the card treatment if special (e.g., "borderless", "showcase", "extended art", "anime", "etched foil"), or null for standard.
-- confidence: "high", "medium", or "low" — how confident you are.
-
-Return only the JSON object, no markdown, no explanation.`;
-
 async function identifyCard(imageB64) {
-  const text = await geminiCall({
-    prompt: IDENTIFY_PROMPT,
-    imageBase64: imageB64,
-    jsonMode: true,
+  const r = await apiFetch('/api/scan', {
+    method: 'POST',
+    body: JSON.stringify({ imageBase64: imageB64, mimeType: 'image/jpeg' }),
   });
-  // Tolerate markdown fences if Gemini ignores jsonMode
-  const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
-  let parsed;
-  try { parsed = JSON.parse(cleaned); }
-  catch { throw new Error('Could not parse model response: ' + text.slice(0, 100)); }
-  return parsed;
+  return r.identification;
 }
 
 function matchCard(ident) {
@@ -948,10 +1091,7 @@ const explainBody = document.getElementById('explainBody');
 let lastExplainCard = null;
 
 function openExplain(card) {
-  if (!hasApiKey()) {
-    toast('Add a Gemini API key first (More → AI Settings)');
-    return;
-  }
+  if (!getPassword()) { toast('Sign in first'); showLoginScreen(); return; }
   lastExplainCard = card;
   explainTitle.textContent = card.name;
   explainSub.textContent = `${SET_NAMES[card.set] || card.set} (${card.set.toUpperCase()}) · #${card.collector_number} · ${cap(card.rarity)}`;
@@ -959,38 +1099,14 @@ function openExplain(card) {
   explainModal.classList.add('show');
   explainBg.classList.add('show');
 
-  const prompt = explainPrompt(card);
-  geminiCall({ prompt }).then(text => {
-    explainBody.textContent = text || '(empty response)';
+  apiFetch('/api/explain', {
+    method: 'POST',
+    body: JSON.stringify({ card }),
+  }).then(r => {
+    explainBody.textContent = r.text || '(empty response)';
   }).catch(e => {
     explainBody.textContent = 'Error: ' + e.message;
   });
-}
-
-function explainPrompt(card) {
-  const parts = [
-    `Card name: ${card.name}`,
-    `Type: ${card.type_line || '(unknown)'}`,
-    card.mana_cost ? `Mana cost: ${card.mana_cost}` : null,
-    card.power ? `Power/Toughness: ${card.power}/${card.toughness}` : null,
-    card.loyalty ? `Loyalty: ${card.loyalty}` : null,
-    `Rarity: ${card.rarity}`,
-    `Set: ${card.set_name} (${card.set.toUpperCase()})`,
-    card.oracle_text ? `\nRules text:\n${card.oracle_text}` : null,
-    card.flavor_text ? `\nFlavor text:\n${card.flavor_text}` : null,
-  ].filter(Boolean).join('\n');
-
-  return `You are a Magic: The Gathering rules expert. Explain this card for a player who knows the basics of MTG. Cover:
-
-1. **What it does** in plain English (1-2 sentences)
-2. **Key interactions / rulings** if any
-3. **Where it shines** — what kind of deck or situation
-4. **Watch out for** — common mistakes or pitfalls
-
-Keep it concise (under 200 words). Use markdown bold for the section headings exactly as shown above.
-
-Card details:
-${parts}`;
 }
 
 document.getElementById('explainClose').addEventListener('click', () => {
@@ -1003,16 +1119,17 @@ explainBg.addEventListener('click', () => {
 });
 document.getElementById('explainAsk').addEventListener('click', async () => {
   if (!lastExplainCard) return;
-  const q = prompt('Ask a follow-up about ' + lastExplainCard.name + ':');
+  const q = window.prompt('Ask a follow-up about ' + lastExplainCard.name + ':');
   if (!q) return;
   const card = lastExplainCard;
   const previous = explainBody.textContent;
   explainBody.textContent = previous + '\n\n— You: ' + q + '\n— Gemini: …';
   try {
-    const reply = await geminiCall({
-      prompt: `Card: ${card.name}\nRules text: ${card.oracle_text || '(none)'}\nType: ${card.type_line}\n\nUser follow-up question: ${q}\n\nAnswer concisely. Use markdown.`,
+    const r = await apiFetch('/api/explain', {
+      method: 'POST',
+      body: JSON.stringify({ card, followup: q }),
     });
-    explainBody.textContent = previous + '\n\n— You: ' + q + '\n— Gemini: ' + reply;
+    explainBody.textContent = previous + '\n\n— You: ' + q + '\n— Gemini: ' + (r.text || '');
   } catch (e) {
     explainBody.textContent = previous + '\n\nError: ' + e.message;
   }

@@ -217,13 +217,35 @@
   .scan-result .actions { display: flex; gap: 8px; margin-top: 8px; }
   .scan-result .actions button { flex: 1; padding: 8px; border-radius: 8px; background: var(--bg3); border: 1px solid var(--border); font-size: 12px; }
   .scan-result.error { background: #4a2222; border-color: #6a3333; }
+
+  /* Sync indicator */
+  .sync-indicator { position: fixed; top: calc(8px + var(--safe-top)); right: 12px; z-index: 35; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 11px; backdrop-filter: blur(4px); display: flex; align-items: center; gap: 6px; pointer-events: none; }
+  .sync-indicator.error { background: var(--red); }
+  .sync-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
+  .sync-indicator.error .sync-dot { background: #fff; animation: none; }
+  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 </style>
 </head>
 <body>
 
 <div id="loading" class="loading-screen">
   <div class="spinner"></div>
-  <div style="color: var(--fg2);">Loading Avatar set…</div>
+  <div id="loadingMsg" style="color: var(--fg2);">Loading Avatar set…</div>
+</div>
+
+<div id="loginScreen" class="loading-screen hidden" style="z-index: 220;">
+  <div style="width: 280px; max-width: 90vw; display: flex; flex-direction: column; gap: 12px;">
+    <div style="text-align: center; font-size: 18px; font-weight: 700;">Avatar MTG Tracker</div>
+    <div style="text-align: center; color: var(--fg2); font-size: 13px;">Enter the shared password to continue.</div>
+    <input id="loginPwd" type="password" placeholder="Password" autocomplete="current-password" style="width: 100%; padding: 12px; border-radius: 10px;">
+    <button class="btn btn-primary" id="loginSubmit" style="padding: 12px; border-radius: 10px;">Sign in</button>
+    <div id="loginError" style="text-align: center; color: var(--red); font-size: 12px; min-height: 16px;"></div>
+  </div>
+</div>
+
+<div id="syncIndicator" class="sync-indicator hidden">
+  <span class="sync-dot"></span>
+  <span id="syncText">Syncing…</span>
 </div>
 
 <header>
@@ -330,26 +352,25 @@
 <!-- Settings sheet -->
 <div class="sheet" id="settingsSheet">
   <div class="grab"></div>
-  <h3>Gemini API key</h3>
+  <h3>AI</h3>
   <div style="color: var(--fg2); font-size: 12px; margin-bottom: 8px;">
-    Paste your free key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color: var(--accent2);">Google AI Studio</a>.
-    Stored only in your browser. Used for camera scanning and card explanations.
+    Gemini API key is configured on the server. Camera scanning and card explanations use the shared key.
   </div>
-  <input id="apiKeyInput" type="password" placeholder="AIza..." autocomplete="off" style="width:100%;">
-  <h3>Model</h3>
-  <select id="modelSelect" style="width:100%;">
-    <option value="gemini-2.5-flash">Gemini 2.5 Flash (recommended)</option>
-    <option value="gemini-2.0-flash">Gemini 2.0 Flash (cheaper)</option>
-    <option value="gemini-2.5-pro">Gemini 2.5 Pro (slower, more accurate)</option>
-  </select>
-  <h3>Test connection</h3>
   <div class="opts">
     <button class="opt" id="testApiKey">Send a test ping</button>
     <span id="testResult" style="font-size:12px;color:var(--fg2);align-self:center;"></span>
   </div>
+  <h3>Sync</h3>
+  <div class="opts">
+    <button class="opt" id="forceSync">Force refresh from server</button>
+    <span id="lastSyncResult" style="font-size:12px;color:var(--fg2);align-self:center;"></span>
+  </div>
+  <h3>Account</h3>
+  <div class="opts">
+    <button class="opt" id="signOut" style="color: var(--red);">Sign out (clear local password)</button>
+  </div>
   <div class="sheet-actions">
-    <button class="btn btn-secondary" id="closeSettings">Cancel</button>
-    <button class="btn btn-primary" id="saveSettings">Save</button>
+    <button class="btn btn-primary" id="closeSettings">Done</button>
   </div>
 </div>
 
