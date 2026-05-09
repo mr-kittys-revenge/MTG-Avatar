@@ -1603,7 +1603,38 @@ function cleanupLive(closeWs) {
 
 // ----- PWA service worker -----
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      // Check for updates aggressively
+      reg.update();
+
+      // Reload once when a new SW takes control, so the new code is in charge.
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        // small delay to let any pending writes settle
+        setTimeout(() => location.reload(), 100);
+      });
+    } catch {}
   });
 }
+
+// ----- Nuclear cleanup: append ?reset=1 to the URL to wipe SW + caches + localStorage -----
+(async () => {
+  if (!new URLSearchParams(location.search).has('reset')) return;
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+    localStorage.clear();
+  } catch {}
+  // strip the query string and reload clean
+  location.replace(location.pathname);
+})();
