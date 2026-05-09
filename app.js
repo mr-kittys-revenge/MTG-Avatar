@@ -82,8 +82,11 @@ function saveCollectionCache() {
   localStorage.setItem(VERSION_KEY, String(serverVersion));
 }
 function loadPrefs() {
-  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || { showStats: true }; }
-  catch { return { showStats: true }; }
+  try {
+    const p = JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+    return { showStats: true, quickAdd: false, quickAddFinish: 'n', ...p };
+  }
+  catch { return { showStats: true, quickAdd: false, quickAddFinish: 'n' }; }
 }
 function savePrefs() {
   localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -293,7 +296,13 @@ function makeCardEl(card) {
     imgwrap.appendChild(marks);
   }
 
-  imgwrap.addEventListener('click', () => openModal(card));
+  imgwrap.addEventListener('click', () => {
+    if (prefs.quickAdd) {
+      quickAddOne(card, wrap);
+    } else {
+      openModal(card);
+    }
+  });
   wrap.appendChild(imgwrap);
 
   const meta = document.createElement('div');
@@ -302,6 +311,9 @@ function makeCardEl(card) {
     <div class="name">${escapeHtml(card.name)}</div>
     <div class="num">${SET_NAMES[card.set] || card.set} · ${card.collector_number}</div>
   `;
+  // In quick-add mode, give the user an obvious "open detail" path on the meta area
+  meta.addEventListener('click', () => openModal(card));
+  meta.style.cursor = 'pointer';
   wrap.appendChild(meta);
 
   // Inline +/- controls (nonfoil + foil if available)
@@ -1232,6 +1244,57 @@ document.getElementById('explainAsk').addEventListener('click', async () => {
     explainBody.textContent = previous + '\n\nError: ' + e.message;
   }
 });
+
+// ============================================================
+// Quick-add mode — tap any card image in the grid to +1 instantly.
+// ============================================================
+function applyQuickAddState() {
+  const btn = document.getElementById('quickAddBtn');
+  const banner = document.getElementById('quickAddBanner');
+  const ftog = document.getElementById('qaFinishToggle');
+  document.body.classList.toggle('quick-add', !!prefs.quickAdd);
+  if (btn) btn.classList.toggle('active', !!prefs.quickAdd);
+  if (banner) banner.classList.toggle('hidden', !prefs.quickAdd);
+  if (ftog) {
+    ftog.dataset.finish = prefs.quickAddFinish || 'n';
+    ftog.textContent = ftog.dataset.finish === 'f' ? 'Foil' : ftog.dataset.finish === 'e' ? 'Etched' : 'NF';
+  }
+}
+
+document.getElementById('quickAddBtn').addEventListener('click', () => {
+  prefs.quickAdd = !prefs.quickAdd;
+  savePrefs();
+  applyQuickAddState();
+  toast(prefs.quickAdd ? '⚡ Quick-add ON — tap cards to +1' : 'Quick-add off');
+});
+document.getElementById('qaFinishToggle').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  // Cycle NF → Foil → Etched → NF
+  const cur = prefs.quickAddFinish || 'n';
+  prefs.quickAddFinish = cur === 'n' ? 'f' : cur === 'f' ? 'e' : 'n';
+  savePrefs();
+  applyQuickAddState();
+});
+
+function quickAddOne(card, tileEl) {
+  let key = prefs.quickAddFinish || 'n';
+  // Validate finish — fall back if card doesn't support it
+  if (key === 'f' && !hasFinish(card, 'foil')) key = 'n';
+  if (key === 'e' && !hasFinish(card, 'etched')) key = hasFinish(card, 'foil') ? 'f' : 'n';
+  const cur = getEntry(card.id);
+  setEntry(card.id, { [key]: (cur[key] || 0) + 1 });
+  refreshCardEl(card.id);
+  // Brief flash on the tile so it's obvious the tap registered
+  if (tileEl) {
+    tileEl.classList.remove('qa-flash');
+    // force reflow to restart animation
+    void tileEl.offsetWidth;
+    tileEl.classList.add('qa-flash');
+  }
+}
+
+// Apply state on boot (after prefs load)
+applyQuickAddState();
 
 // ============================================================
 // Decks & deck builder
