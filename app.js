@@ -1764,16 +1764,31 @@ function resolveDeckCard(c) {
 }
 
 // --- Deck result rendering ---
+let activeDeck = null;          // the deck currently open in the modal
+let activeDeckOriginal = null;  // snapshot for cancel-revert
+let activeDeckEditing = false;  // is the user editing the open deck right now?
+let activeDeckUnsaved = false;  // was the deck just built (vs. loaded from server)?
+
 function openDeckResult(deck, unsaved) {
   if (!deck) return;
-  deckBuildingEl.classList.add('hidden');
-  deckResultEl.innerHTML = renderDeck(deck, !!unsaved);
+  activeDeck = deck;
+  activeDeckOriginal = JSON.parse(JSON.stringify(deck));
+  activeDeckUnsaved = !!unsaved;
+  // Unsaved decks open in editable state by default; saved decks open read-only.
+  activeDeckEditing = !!unsaved;
+  rerenderActiveDeck();
   deckModal.classList.add('show');
   deckBg.classList.add('show');
-  wireDeckResultButtons(deck, !!unsaved);
 }
 
-function renderDeck(deck, unsaved) {
+function rerenderActiveDeck() {
+  if (!activeDeck) return;
+  deckBuildingEl.classList.add('hidden');
+  deckResultEl.innerHTML = renderDeck(activeDeck, activeDeckUnsaved, activeDeckEditing);
+  wireDeckResultButtons(activeDeck, activeDeckUnsaved, activeDeckEditing);
+}
+
+function renderDeck(deck, unsaved, editing) {
   const cards = deck.cards || [];
   const totalCount = cards.reduce((s, c) => s + (c.count || 1), 0);
   const ownedCount = cards.reduce((s, c) => s + (deckCardOwned(c) ? (c.count || 1) : 0), 0);
@@ -1786,7 +1801,7 @@ function renderDeck(deck, unsaved) {
     .map(role => `
       <div class="deck-section">${cap(role)} <span style="color:var(--fg);">· ${groups[role].reduce((s,c)=>s+(c.count||1),0)} cards</span></div>
       <div class="deck-cards">
-        ${groups[role].map(c => deckCardHtml(c)).join('')}
+        ${groups[role].map((c, i) => deckCardHtml(c, editing, cards.indexOf(c))).join('')}
       </div>
     `).join('');
 
@@ -1818,10 +1833,21 @@ function renderDeck(deck, unsaved) {
     ${missingCount > 0 ? `<button class="btn btn-secondary" id="deckWishlistMissing" style="width:100%;padding:10px;border-radius:10px;margin:6px 0 4px;font-size:13px;color:var(--accent2);">★ Add ${missingCount} missing card${missingCount===1?'':'s'} to wishlist</button>` : ''}
     <button class="btn btn-secondary" id="deckCopyList" style="width:100%;padding:10px;border-radius:10px;margin:4px 0 4px;font-size:13px;">📋 Copy deck list as text</button>
     ${groupHtml}
+    ${editing ? `
+      <div class="deck-add-row">
+        <input id="deckAddInput" type="text" placeholder="Search to add a card by name…" autocomplete="off">
+      </div>
+      <div id="deckAddResults" class="deck-add-results"></div>
+    ` : ''}
     ${missingRec ? `<div class="deck-section">Recommended additions <span style="color:var(--fg2);font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;">— from outside the Avatar set, manage manually</span></div><div class="deck-cards">${missingRec}</div>` : ''}
     ${deck.strategy ? `<div class="deck-section">Strategy</div><div class="deck-strategy">${escapeHtml(deck.strategy)}</div>` : ''}
     <div class="sheet-actions">
-      ${unsaved ? `<button class="btn btn-secondary" id="deckDiscard">Discard</button><button class="btn btn-primary" id="deckSave">Save deck</button>` : `<button class="btn btn-secondary" id="deckDoneBtn">Close</button>`}
+      ${unsaved
+        ? `<button class="btn btn-secondary" id="deckDiscard">Discard</button><button class="btn btn-primary" id="deckSave">Save deck</button>`
+        : editing
+          ? `<button class="btn btn-secondary" id="deckCancelEdit">Cancel</button><button class="btn btn-primary" id="deckSaveEdit">Save changes</button>`
+          : `<button class="btn btn-secondary" id="deckEditBtn">✏️ Edit</button><button class="btn btn-primary" id="deckDoneBtn">Close</button>`
+      }
     </div>
   `;
 }
@@ -1833,13 +1859,19 @@ function deckCardOwned(c) {
   return (e.n + e.f + e.e) >= (c.count || 1);
 }
 
-function deckCardHtml(c) {
+function deckCardHtml(c, editing, idx) {
   const card = c.card_id ? CARDS.find(x => x.id === c.card_id) : null;
   const img = card ? card.image_small : '';
   const owned = deckCardOwned(c);
   const badge = c.is_basic_land
     ? '<span class="badge-basic">basic</span>'
     : owned ? '<span class="badge-have">have</span>' : '<span class="badge-need">need</span>';
+  const editControls = editing ? `
+    <div class="deck-edit-controls">
+      <button data-action="dec" data-i="${idx}" aria-label="decrement">−</button>
+      <button data-action="inc" data-i="${idx}" aria-label="increment">+</button>
+      <button data-action="del" data-i="${idx}" class="del" aria-label="remove">✕</button>
+    </div>` : '';
   return `<div class="deck-card">
     ${img ? `<img src="${img}" alt="">` : `<div style="width:40px;height:56px;background:var(--bg2);border-radius:4px;flex-shrink:0;"></div>`}
     <div class="info">
@@ -1848,6 +1880,7 @@ function deckCardHtml(c) {
     </div>
     ${badge}
     <div class="count">×${c.count || 1}</div>
+    ${editControls}
   </div>`;
 }
 
@@ -1909,9 +1942,71 @@ async function copyDeckList(deck) {
   }
 }
 
-function wireDeckResultButtons(deck, unsaved) {
+function wireDeckResultButtons(deck, unsaved, editing) {
   const copyBtn = document.getElementById('deckCopyList');
   if (copyBtn) copyBtn.addEventListener('click', () => copyDeckList(deck));
+
+  // Edit-mode controls (count +/-, remove)
+  if (editing) {
+    document.querySelectorAll('.deck-edit-controls button').forEach(b => {
+      b.addEventListener('click', () => {
+        const action = b.dataset.action;
+        const i = parseInt(b.dataset.i);
+        if (isNaN(i) || !deck.cards[i]) return;
+        if (action === 'inc') deck.cards[i].count = (deck.cards[i].count || 1) + 1;
+        else if (action === 'dec') {
+          deck.cards[i].count = (deck.cards[i].count || 1) - 1;
+          if (deck.cards[i].count <= 0) deck.cards.splice(i, 1);
+        }
+        else if (action === 'del') deck.cards.splice(i, 1);
+        rerenderActiveDeck();
+      });
+    });
+
+    // Add-card search box
+    const input = document.getElementById('deckAddInput');
+    const results = document.getElementById('deckAddResults');
+    if (input) {
+      let t;
+      input.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(() => renderDeckAddResults(input.value, results), 100);
+      });
+    }
+  }
+
+  const editBtn = document.getElementById('deckEditBtn');
+  if (editBtn) editBtn.addEventListener('click', () => {
+    activeDeckEditing = true;
+    rerenderActiveDeck();
+  });
+
+  const cancelEdit = document.getElementById('deckCancelEdit');
+  if (cancelEdit) cancelEdit.addEventListener('click', () => {
+    // Revert to the snapshot taken when we opened the deck
+    activeDeck = JSON.parse(JSON.stringify(activeDeckOriginal));
+    activeDeckEditing = false;
+    rerenderActiveDeck();
+  });
+
+  const saveEdit = document.getElementById('deckSaveEdit');
+  if (saveEdit) saveEdit.addEventListener('click', async () => {
+    const editedName = document.getElementById('deckNameEdit')?.textContent.trim() || deck.name;
+    const toSave = { ...deck, name: editedName, updated_at: new Date().toISOString() };
+    try {
+      saveEdit.disabled = true; saveEdit.textContent = 'Saving…';
+      const r = await apiFetch('/api/decks', { method: 'POST', body: JSON.stringify({ deck: toSave }) });
+      decks[r.deck.id] = r.deck;
+      activeDeck = r.deck;
+      activeDeckOriginal = JSON.parse(JSON.stringify(r.deck));
+      activeDeckEditing = false;
+      toast('Deck saved');
+      rerenderActiveDeck();
+    } catch (e) {
+      saveEdit.disabled = false; saveEdit.textContent = 'Save changes';
+      alert('Save failed: ' + e.message);
+    }
+  });
 
   const wishBtn = document.getElementById('deckWishlistMissing');
   if (wishBtn) {
@@ -1956,6 +2051,67 @@ function wireDeckResultButtons(deck, unsaved) {
   if (discard) discard.addEventListener('click', closeDeckModal);
   const close = document.getElementById('deckDoneBtn');
   if (close) close.addEventListener('click', closeDeckModal);
+}
+
+function renderDeckAddResults(query, container) {
+  if (!container) return;
+  const q = (query || '').toLowerCase().trim();
+  if (!q) { container.innerHTML = ''; return; }
+  // Filter catalog by name match. Skip art series + tokens.
+  const matches = CARDS.filter(c =>
+    c.name.toLowerCase().includes(q)
+    && !['atla', 'atle', 'ttla', 'ttle'].includes(c.set)
+    && !/^Token\b/i.test(c.type_line || '')
+  ).slice(0, 8);
+  if (!matches.length) {
+    container.innerHTML = '<div style="padding:6px;color:var(--fg2);font-size:12px;">No matches</div>';
+    return;
+  }
+  container.innerHTML = matches.map(c => `
+    <div class="deck-add-result" data-id="${c.id}">
+      <img src="${c.image_small || ''}" alt="">
+      <div class="nm">${escapeHtml(c.name)}</div>
+      <div class="meta">${c.set.toUpperCase()} #${c.collector_number}</div>
+    </div>
+  `).join('');
+  container.querySelectorAll('.deck-add-result').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      const card = CARDS.find(x => x.id === id);
+      if (!card || !activeDeck) return;
+      // If card already in deck, increment its count instead of duplicating
+      const existing = activeDeck.cards.findIndex(c => c.card_id === id);
+      if (existing >= 0) {
+        activeDeck.cards[existing].count = (activeDeck.cards[existing].count || 1) + 1;
+      } else {
+        const role = guessRole(card);
+        activeDeck.cards.push({
+          card_id: card.id,
+          name: card.name,
+          set: card.set,
+          collector_number: card.collector_number,
+          count: 1,
+          role,
+          reason: '',
+        });
+      }
+      // Clear search and re-render
+      const input = document.getElementById('deckAddInput');
+      if (input) input.value = '';
+      rerenderActiveDeck();
+    });
+  });
+}
+
+function guessRole(card) {
+  const t = (card.type_line || '').toLowerCase();
+  if (t.includes('land')) return 'land';
+  if (t.includes('creature')) return 'creature';
+  if (t.includes('planeswalker')) return 'utility';
+  if (/instant|sorcery/.test(t)) return 'spell';
+  if (t.includes('artifact')) return 'utility';
+  if (t.includes('enchantment')) return 'utility';
+  return 'other';
 }
 
 function closeDeckModal() {
