@@ -238,6 +238,22 @@
   .live-transcript .turn.tool { color: var(--fg2); font-size: 11px; font-style: italic; }
   .live-transcript .turn .who { font-weight: 700; margin-right: 6px; }
 
+  /* Live card panel — appears when Gemini find_cards a match */
+  .live-card-panel { position: absolute; left: 12px; right: 12px; bottom: calc(220px + var(--safe-bot)); display: flex; gap: 10px; align-items: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 10px; z-index: 18; box-shadow: 0 6px 18px rgba(0,0,0,0.4); animation: panelIn 0.2s ease-out; }
+  @keyframes panelIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .live-card-panel img { width: 56px; height: 78px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: var(--bg3); }
+  .live-card-panel .info { flex: 1; min-width: 0; }
+  .live-card-panel .name { font-weight: 700; font-size: 13px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live-card-panel .meta { font-size: 11px; color: var(--fg2); font-family: monospace; margin-top: 2px; }
+  .live-card-panel .counts { font-size: 11px; color: var(--accent); margin-top: 3px; }
+  .live-card-panel .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 130px; }
+  .live-card-panel .ic-btn { padding: 6px 9px; border-radius: 8px; background: var(--bg3); border: 1px solid var(--border); font-size: 11px; font-weight: 700; color: var(--fg); }
+  .live-card-panel .ic-btn:active { background: var(--accent); color: #1a1d23; }
+  .live-card-panel .ic-btn.foil { color: var(--accent); }
+  .live-card-panel .ic-btn.foil:active { background: var(--accent); color: #1a1d23; }
+  .live-card-panel .ic-btn.wish { color: var(--accent2); }
+  .live-card-panel .ic-btn.dismiss { color: var(--fg2); }
+
   /* Sync indicator */
   .sync-indicator { position: fixed; top: calc(8px + var(--safe-top)); right: 12px; z-index: 35; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 11px; backdrop-filter: blur(4px); display: flex; align-items: center; gap: 6px; pointer-events: none; }
   .sync-indicator.error { background: var(--red); }
@@ -402,7 +418,7 @@
   <div class="scan-frame"><div class="frame-corners"></div></div>
   <div class="scan-top">
     <button class="icon-btn" id="scanClose">✕</button>
-    <div class="scan-hint" id="scanHint">Frame the card. Tap shutter to identify.</div>
+    <div class="scan-hint" id="scanHint">One card or fan multiple — tap shutter to identify.</div>
   </div>
   <div class="scan-toggles">
     <label class="tog">
@@ -434,6 +450,20 @@
     <div class="live-status" id="liveStatus">Connecting…</div>
   </div>
   <div class="live-mic-meter"><div id="liveMicBar"></div></div>
+  <div id="liveCardPanel" class="live-card-panel hidden">
+    <img id="livePanelImg" alt="">
+    <div class="info">
+      <div class="name" id="livePanelName"></div>
+      <div class="meta" id="livePanelMeta"></div>
+      <div class="counts" id="livePanelCounts"></div>
+    </div>
+    <div class="actions">
+      <button class="ic-btn" id="livePanelAddNF" title="Add nonfoil">+ NF</button>
+      <button class="ic-btn foil" id="livePanelAddFoil" title="Add foil">+ Foil</button>
+      <button class="ic-btn wish" id="livePanelWish" title="Wishlist">★</button>
+      <button class="ic-btn dismiss" id="livePanelDismiss" title="Dismiss">✕</button>
+    </div>
+  </div>
   <div class="live-bottom">
     <div class="live-toggles">
       <label class="tog">

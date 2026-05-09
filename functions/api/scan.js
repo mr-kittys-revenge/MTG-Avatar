@@ -2,16 +2,23 @@
 //
 // Env: GEMINI_API_KEY (required), GEMINI_MODEL (optional, defaults to gemini-2.5-flash)
 
-const IDENTIFY_PROMPT = `You are looking at a Magic: The Gathering card from the "Avatar: The Last Airbender" Universes Beyond release.
+const IDENTIFY_PROMPT = `You are looking at a photo containing one OR MORE Magic: The Gathering cards from the "Avatar: The Last Airbender" Universes Beyond release. The cards may be fanned out, stacked partially, or laid in a grid.
 
-Read the card and return ONLY a JSON object with these keys:
+Identify EVERY card you can see, even if partially obscured. For each, read:
 - name: the card's printed title (string)
 - set_code: the 3-4 letter set code shown at the bottom of the card. Possible values: "TLA", "TLE", "PTLA", "JTLA", "ATLA", "ATLE", "TTLA", "TTLE", "FTLA". Return uppercase. Use null if you can't read it.
 - collector_number: the printed collector number from the bottom of the card (e.g. "0123/394" → return "123"). Just the number portion as a string, leading zeros stripped. Use null if unreadable.
-- treatment: brief description of the card treatment if special (e.g., "borderless", "showcase", "extended art", "anime", "etched foil"), or null for standard.
-- confidence: "high", "medium", or "low" — how confident you are.
+- treatment: brief description if special (e.g., "borderless", "showcase", "extended art", "anime", "etched foil"), or null for standard.
+- confidence: "high", "medium", or "low".
 
-Return only the JSON object, no markdown, no explanation.`;
+Return ONLY a JSON object of this exact shape:
+{
+  "cards": [
+    { "name": "...", "set_code": "...", "collector_number": "...", "treatment": null, "confidence": "high" }
+  ]
+}
+
+If you can read only one card, return an array with one element. If the photo doesn't appear to contain any MTG card, return { "cards": [] }. No markdown, no commentary.`;
 
 export async function onRequestPost({ request, env }) {
   if (!env.GEMINI_API_KEY) return json({ error: 'server not configured: GEMINI_API_KEY missing' }, 500);

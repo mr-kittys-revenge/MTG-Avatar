@@ -936,8 +936,20 @@ async function captureAndIdentify() {
   try {
     const b64 = captureFrameAsJpeg();
     const ident = await identifyCard(b64);
-    const matches = matchCard(ident);
-    showScanResult(matches, ident);
+
+    // Multi-card response: { cards: [...] }. Single-card legacy: a single object.
+    let identifiedList = [];
+    if (ident && Array.isArray(ident.cards)) identifiedList = ident.cards;
+    else if (ident && (ident.name || ident.set_code)) identifiedList = [ident];
+
+    if (identifiedList.length === 0) {
+      showScanResult([], null);
+    } else if (identifiedList.length === 1) {
+      const matches = matchCard(identifiedList[0]);
+      showScanResult(matches, identifiedList[0]);
+    } else {
+      showMultiScanResult(identifiedList);
+    }
   } catch (e) {
     showScanError(e.message);
   } finally {
@@ -1011,6 +1023,83 @@ function showScanError(msg) {
   document.getElementById('srDismiss').addEventListener('click', () => {
     scanResult.classList.add('hidden'); scanResult.classList.remove('error');
   });
+}
+
+function showMultiScanResult(identifiedList) {
+  scanResult.classList.remove('hidden');
+  scanResult.classList.remove('error');
+
+  const isFoil = document.getElementById('scanFoil').checked;
+  const isEtched = document.getElementById('scanEtched').checked;
+  const finishKey = isEtched ? 'e' : isFoil ? 'f' : 'n';
+  const finishLabel = isEtched ? 'Etched' : isFoil ? 'Foil' : 'NF';
+
+  const rows = identifiedList.map((id, idx) => {
+    const matches = matchCard(id);
+    const top = matches[0];
+    if (!top) {
+      return `<div class="match" data-i="${idx}">
+        <img src="" alt="" style="background:var(--bg3);">
+        <div class="info">
+          <div class="nm">No match</div>
+          <div class="meta-line">Read: ${escapeHtml(id.name || '?')} ${id.set_code || '?'} #${id.collector_number || '?'}</div>
+        </div>
+        <button class="add" disabled style="opacity:0.4;">×</button>
+      </div>`;
+    }
+    const e = getEntry(top.id);
+    const cur = e[finishKey] || 0;
+    return `<div class="match" data-id="${top.id}" data-i="${idx}">
+      <img src="${top.image_small || ''}" alt="">
+      <div class="info">
+        <div class="nm">${escapeHtml(top.name)}</div>
+        <div class="meta-line">${top.set.toUpperCase()} · #${top.collector_number} · ${cap(top.rarity)}</div>
+        <div class="meta-line" style="color:var(--accent);">${finishLabel} ${cur} → ${cur + 1}</div>
+      </div>
+      <button class="add" data-id="${top.id}">+1</button>
+    </div>`;
+  }).join('');
+
+  scanResult.innerHTML = `
+    <h4>${identifiedList.length} cards detected · adding as ${finishLabel}</h4>
+    ${rows}
+    <div class="actions">
+      <button id="srAddAll">Add all (+1 ${finishLabel} each)</button>
+      <button id="srRetry">Retry</button>
+      <button id="srDismiss">Dismiss</button>
+    </div>
+  `;
+
+  scanResult.querySelectorAll('button.add').forEach(b => {
+    b.addEventListener('click', () => {
+      addOneFromMulti(b.dataset.id, finishKey);
+      b.disabled = true;
+      b.style.opacity = '0.6';
+      b.textContent = '✓';
+    });
+  });
+  document.getElementById('srAddAll').addEventListener('click', () => {
+    let added = 0;
+    scanResult.querySelectorAll('button.add[data-id]:not([disabled])').forEach(b => {
+      addOneFromMulti(b.dataset.id, finishKey);
+      b.disabled = true; b.style.opacity = '0.6'; b.textContent = '✓';
+      added++;
+    });
+    toast(`Added ${added} card${added === 1 ? '' : 's'}`);
+    if (!document.getElementById('scanRapid').checked) closeScan();
+  });
+  document.getElementById('srRetry').addEventListener('click', () => { scanResult.classList.add('hidden'); });
+  document.getElementById('srDismiss').addEventListener('click', () => { scanResult.classList.add('hidden'); });
+}
+
+function addOneFromMulti(id, finishKey) {
+  const card = CARDS.find(c => c.id === id); if (!card) return;
+  let key = finishKey;
+  if (key === 'f' && !hasFinish(card, 'foil')) key = 'n';
+  if (key === 'e' && !hasFinish(card, 'etched')) key = hasFinish(card, 'foil') ? 'f' : 'n';
+  const cur = getEntry(id);
+  setEntry(id, { [key]: (cur[key] || 0) + 1 });
+  refreshCardEl(id);
 }
 
 function showScanResult(matches, ident) {
@@ -1239,19 +1328,42 @@ function setLiveStatus(text, cls) {
 
 function sendSetup() {
   const summary = collectionSummary();
-  const sys = `You are a helpful conversational assistant inside a Magic: The Gathering collection-tracking app for the Avatar: The Last Airbender Universes Beyond release.
+  const sys = `You are a friendly, calm conversational assistant for a Magic: The Gathering Avatar: The Last Airbender collection tracker. The user is collecting these cards.
 
-The user's collection right now: ${summary}.
+Current collection snapshot: ${summary}.
 
-You can use these tools to help the user:
-- find_card(query): search the 937-card catalog by name. Use this BEFORE add_card so you have the right card_id.
-- add_card(card_id, finish, count): increment a card in the user's collection. finish is "nonfoil" / "foil" / "etched". count defaults to 1.
-- set_wishlist(card_id, on): toggle wishlist for a card.
-- get_collection_summary(): get current totals and per-set completion.
+# How to behave when you see a card on camera
 
-When the user shows you a card on camera and says they want to add it, identify it visually, call find_card to get the card_id, confirm the result with the user, then call add_card. Be concise — this is a voice conversation.
+DEFAULT: identify the card and let them ask questions. DO NOT add it to the collection unless they explicitly say so.
 
-If the user asks open questions about their collection ("do I have any blue cards?", "what's a good deck for…"), answer using your knowledge of MTG and what tools tell you.`;
+When you see a card:
+1. Optionally call find_card with the card name to confirm and surface the visual card panel for the user.
+2. Say what the card is in one short sentence ("That's Aang, the Last Airbender — a 3/2 white legendary creature.")
+3. Then PAUSE. Wait for their next words.
+
+Common things they'll do next:
+- Ask about it ("how does that work?", "is it good?") → answer naturally
+- Ask to add it ("add it", "add as a foil", "add two", "add to wishlist") → THEN call add_card or set_wishlist
+- Just keep showing you another card → you can comment briefly or wait silently
+- Be silent → stay silent. Don't keep talking.
+
+# Strict rules
+
+- NEVER call add_card unless the user EXPLICITLY says to add. Just identifying or describing is not a request to add.
+- NEVER call set_wishlist unless they explicitly say "wishlist" or "want this" or similar.
+- The visual card panel they see when you call find_card has a tap-to-add button — tell them they can tap it OR tell you to add. Don't pressure them.
+- Keep replies SHORT — usually 1–2 sentences. This is a voice conversation, not an essay.
+- Don't narrate your tool calls ("let me look that up...") — just call the tool and respond with the result.
+- If they ask a strategy or rules question, answer clearly using MTG knowledge.
+
+# Tools
+
+- find_card(query): search the 937-card catalog by name. Returns matches with card_ids. Surfaces a tap-to-add panel for the user.
+- add_card(card_id, finish, count): increment a card. finish = "nonfoil" / "foil" / "etched". count default 1. ONLY ON EXPLICIT REQUEST.
+- set_wishlist(card_id, on): toggle wishlist. ONLY ON EXPLICIT REQUEST.
+- get_collection_summary(): totals + per-set completion %.
+
+Be concise, helpful, and patient.`;
 
   liveWs.send(JSON.stringify({
     setup: {
@@ -1511,6 +1623,8 @@ function executeLiveTool(name, args) {
       const exact = CARDS.filter(c => c.name.toLowerCase() === q);
       const partial = CARDS.filter(c => c.name.toLowerCase() !== q && c.name.toLowerCase().includes(q));
       const list = [...exact, ...partial].slice(0, 6);
+      // Surface the top match in the live card panel for tap-to-add
+      if (list[0]) showLivePanel(list[0]);
       return {
         matches: list.map(c => {
           const e = getEntry(c.id);
@@ -1536,6 +1650,7 @@ function executeLiveTool(name, args) {
       const inc = Math.max(1, Math.round(args.count || 1));
       setEntry(card.id, { [key]: (cur[key] || 0) + inc });
       refreshCardEl(card.id);
+      if (liveCardPanelCardId === card.id) refreshLivePanel();
       const e = getEntry(card.id);
       return { ok: true, name: card.name, set: card.set.toUpperCase(), totals: { nonfoil: e.n, foil: e.f, etched: e.e } };
     }
@@ -1544,6 +1659,7 @@ function executeLiveTool(name, args) {
       if (!card) return { error: `No card with id ${args.card_id}` };
       setEntry(card.id, { w: !!args.on });
       refreshCardEl(card.id);
+      if (liveCardPanelCardId === card.id) refreshLivePanel();
       return { ok: true, name: card.name, wishlist: !!args.on };
     }
     case 'get_collection_summary': {
@@ -1568,6 +1684,78 @@ function executeLiveTool(name, args) {
 }
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+
+// --- Live card panel (tap-to-add overlay) ---
+let liveCardPanelCardId = null;
+
+function showLivePanel(card) {
+  if (!card) return;
+  // Avoid spamming: if already showing same card, refresh counts only.
+  const e = getEntry(card.id);
+  document.getElementById('livePanelImg').src = card.image_small || '';
+  document.getElementById('livePanelImg').alt = card.name;
+  document.getElementById('livePanelName').textContent = card.name;
+  document.getElementById('livePanelMeta').textContent = `${card.set.toUpperCase()} · #${card.collector_number} · ${cap(card.rarity)}`;
+  const parts = [];
+  if (e.n) parts.push(`${e.n} NF`);
+  if (e.f) parts.push(`${e.f} Foil`);
+  if (e.e) parts.push(`${e.e} Etched`);
+  if (e.w) parts.push(`★ wishlist`);
+  document.getElementById('livePanelCounts').textContent = parts.length ? `Owned: ${parts.join(' · ')}` : 'Not owned';
+  liveCardPanelCardId = card.id;
+  document.getElementById('liveCardPanel').classList.remove('hidden');
+}
+
+function refreshLivePanel() {
+  if (!liveCardPanelCardId) return;
+  const card = CARDS.find(c => c.id === liveCardPanelCardId);
+  if (card) showLivePanel(card);
+}
+
+function hideLivePanel() {
+  document.getElementById('liveCardPanel').classList.add('hidden');
+  liveCardPanelCardId = null;
+}
+
+function livePanelAdd(finishKey) {
+  if (!liveCardPanelCardId) return;
+  const card = CARDS.find(c => c.id === liveCardPanelCardId);
+  if (!card) return;
+  // Validate finish exists; fall back to nonfoil
+  let key = finishKey;
+  if (key === 'f' && !hasFinish(card, 'foil')) key = 'n';
+  if (key === 'e' && !hasFinish(card, 'etched')) key = hasFinish(card, 'foil') ? 'f' : 'n';
+  const cur = getEntry(card.id);
+  setEntry(card.id, { [key]: (cur[key] || 0) + 1 });
+  refreshCardEl(card.id);
+  refreshLivePanel();
+  toast(`+1 ${key === 'n' ? 'NF' : key === 'f' ? 'Foil' : 'Etched'}: ${card.name}`);
+}
+
+function livePanelToggleWish() {
+  if (!liveCardPanelCardId) return;
+  const cur = getEntry(liveCardPanelCardId);
+  setEntry(liveCardPanelCardId, { w: !cur.w });
+  refreshCardEl(liveCardPanelCardId);
+  refreshLivePanel();
+}
+
+// Wire panel buttons once. Use _wired guard to avoid double-binding if this
+// IIFE somehow runs twice (e.g. live-reload or duplicate include).
+(() => {
+  const ready = () => {
+    const wire = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el && !el._wired) { el.addEventListener('click', fn); el._wired = true; }
+    };
+    wire('livePanelAddNF', () => livePanelAdd('n'));
+    wire('livePanelAddFoil', () => livePanelAdd('f'));
+    wire('livePanelWish', livePanelToggleWish);
+    wire('livePanelDismiss', hideLivePanel);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready);
+  else ready();
+})();
 
 function bytesToBase64(bytes) {
   let bin = '';
@@ -1608,6 +1796,7 @@ function cleanupLive(closeWs) {
   }
   liveVideo.srcObject = null;
   liveMicBar.style.width = '0%';
+  hideLivePanel();
 }
 
 // ----- PWA service worker -----

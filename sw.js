@@ -3,7 +3,7 @@
 //
 // IMPORTANT: bump VERSION any time the app shell or app.js changes substantially.
 // Otherwise old clients keep serving the cached version forever.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CORE = `mtg-avatar-core-${VERSION}`;
 const IMAGES = `mtg-avatar-images-${VERSION}`;
 
