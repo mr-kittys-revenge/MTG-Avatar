@@ -1,0 +1,19 @@
+{
+  "name": "Avatar MTG Tracker",
+  "short_name": "AvatarMTG",
+  "description": "Track your Magic: The Gathering Avatar: The Last Airbender card collection.",
+  "start_url": ".",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#1a1d23",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
