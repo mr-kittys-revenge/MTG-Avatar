@@ -770,6 +770,190 @@ document.getElementById('importFile').addEventListener('change', async (ev) => {
   ev.target.value = '';
 });
 
+// ============================================================
+// Bulk text import — paste a deck list / collection list / CSV
+// ============================================================
+const bulkSheet = document.getElementById('bulkSheet');
+let bulkResolved = []; // last preview's resolved entries
+
+document.getElementById('bulkPasteBtn').addEventListener('click', () => {
+  hideSheets();
+  document.getElementById('bulkInput').value = '';
+  document.getElementById('bulkPreview').innerHTML = '';
+  document.getElementById('bulkApplyBtn').classList.add('hidden');
+  bulkResolved = [];
+  showSheet(bulkSheet);
+});
+document.getElementById('bulkCancelBtn').addEventListener('click', hideSheets);
+
+document.getElementById('bulkParseBtn').addEventListener('click', () => {
+  const text = document.getElementById('bulkInput').value;
+  const parsed = parseBulkText(text);
+  bulkResolved = parsed.map(p => ({ ...p, match: resolveBulkEntry(p) }));
+  renderBulkPreview();
+});
+
+document.getElementById('bulkApplyBtn').addEventListener('click', applyBulkImport);
+
+function parseBulkText(text) {
+  const out = [];
+  if (!text) return out;
+  const lines = text.split(/\r?\n/);
+
+  // Detect Manabox/Deckbox CSV by first line containing typical columns
+  const headerLine = lines.find(l => l.trim()) || '';
+  const isCsv = /,/.test(headerLine) && /name/i.test(headerLine) && /(set|edition)/i.test(headerLine);
+
+  if (isCsv) {
+    const rows = parseCsv(text);
+    if (!rows.length) return out;
+    const headers = rows[0].map(h => h.trim().toLowerCase());
+    const idx = (key) => headers.findIndex(h => h === key || h.includes(key));
+    const iName = idx('name');
+    const iSet = idx('set');                // Manabox: 'set code'; Deckbox: 'edition'
+    const iEdition = headers.findIndex(h => h === 'edition');
+    const setCol = iSet >= 0 ? iSet : iEdition;
+    const iCN = idx('collector') >= 0 ? idx('collector') : idx('card number');
+    const iQty = idx('quantity') >= 0 ? idx('quantity') : idx('count');
+    const iFoil = idx('foil') >= 0 ? idx('foil') : idx('printing');
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row || !row[iName]) continue;
+      const name = (row[iName] || '').trim();
+      if (!name) continue;
+      const set = (row[setCol] || '').trim().toLowerCase();
+      const cn = (row[iCN] || '').trim().replace(/^0+/, '');
+      const qty = Math.max(1, parseInt(row[iQty] || '1') || 1);
+      const foilStr = (row[iFoil] || '').toString().trim().toLowerCase();
+      const foil = /foil|true|yes|1/.test(foilStr) && foilStr !== 'normal';
+      out.push({ raw: row.join(','), count: qty, name, set, collector_number: cn, foil });
+    }
+    return out;
+  }
+
+  // Plaintext deck-list format
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('//') || line.startsWith('#')) continue;
+    // Skip section headers like "Commander", "Deck", "Sideboard"
+    if (/^(commander|deck|sideboard|main|maindeck|companion)$/i.test(line)) continue;
+
+    // Optional foil marker *F* at end
+    let foil = false;
+    let l = line.replace(/\s*\*F\*\s*$/i, () => { foil = true; return ''; });
+    // Optional count + x
+    const m = l.match(/^(?:(\d+)\s*x?\s+)?(.+?)(?:\s*\(([A-Za-z0-9]+)\)\s*([\dA-Za-z\-]+)?)?\s*$/);
+    if (!m) continue;
+    const count = m[1] ? parseInt(m[1]) : 1;
+    const name = (m[2] || '').trim();
+    const set = m[3] ? m[3].toLowerCase() : '';
+    const cn = m[4] ? String(m[4]).replace(/^0+/, '') : '';
+    if (!name) continue;
+    out.push({ raw: rawLine, count, name, set, collector_number: cn, foil });
+  }
+  return out;
+}
+
+function parseCsv(text) {
+  // Very small CSV parser handling quoted fields with embedded commas/quotes.
+  const rows = [];
+  let row = [], cur = '', inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuote) {
+      if (c === '"') {
+        if (text[i+1] === '"') { cur += '"'; i++; }
+        else inQuote = false;
+      } else cur += c;
+    } else {
+      if (c === '"') inQuote = true;
+      else if (c === ',') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i+1] === '\n') i++;
+        row.push(cur); rows.push(row); row = []; cur = '';
+      }
+      else cur += c;
+    }
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.length && r.some(x => x && x.trim()));
+}
+
+function resolveBulkEntry(entry) {
+  const name = entry.name.toLowerCase();
+  const setHint = entry.set;
+  const cnHint = entry.collector_number;
+
+  // Exact set + collector number wins
+  if (setHint && cnHint) {
+    const exact = CARDS.find(c => c.set === setHint && String(c.collector_number).replace(/^0+/, '') === cnHint);
+    if (exact) return exact;
+  }
+
+  // Name match — prefer the requested set if given, else first match
+  const named = CARDS.filter(c => c.name.toLowerCase() === name);
+  if (named.length) {
+    if (setHint) {
+      const setMatch = named.find(c => c.set === setHint);
+      if (setMatch) return setMatch;
+    }
+    return named[0];
+  }
+
+  // Tolerant fallback — name contained in catalog name or vice versa
+  const partial = CARDS.find(c => {
+    const cn = c.name.toLowerCase();
+    return cn === name || cn.startsWith(name) || name.startsWith(cn);
+  });
+  if (partial) return partial;
+
+  return null;
+}
+
+function renderBulkPreview() {
+  const el = document.getElementById('bulkPreview');
+  if (!bulkResolved.length) {
+    el.innerHTML = '<div style="color:var(--fg2);">No parsable lines found.</div>';
+    document.getElementById('bulkApplyBtn').classList.add('hidden');
+    return;
+  }
+  const matched = bulkResolved.filter(r => r.match);
+  const unmatched = bulkResolved.filter(r => !r.match);
+  const totalAdds = matched.reduce((s, r) => s + r.count, 0);
+
+  el.innerHTML = `
+    <div style="margin-bottom:6px;">
+      <strong>${matched.length}</strong> matched (${totalAdds} card${totalAdds===1?'':'s'} to add)${unmatched.length ? `, <span style="color:var(--red);"><strong>${unmatched.length}</strong> couldn't match</span>` : ''}
+    </div>
+    <div style="max-height:180px;overflow-y:auto;background:var(--bg3);border-radius:8px;padding:8px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;">
+      ${matched.slice(0, 30).map(r => `<div>✓ ${r.count}× <strong>${escapeHtml(r.match.name)}</strong> ${r.match.set.toUpperCase()} #${r.match.collector_number}${r.foil ? ' <span style="color:var(--accent);">[foil]</span>' : ''}</div>`).join('')}
+      ${matched.length > 30 ? `<div style="color:var(--fg2);">…and ${matched.length - 30} more</div>` : ''}
+      ${unmatched.length ? unmatched.slice(0, 10).map(r => `<div style="color:var(--red);">✗ ${escapeHtml(r.name)} ${r.set ? '(' + r.set.toUpperCase() + ')' : ''}</div>`).join('') : ''}
+      ${unmatched.length > 10 ? `<div style="color:var(--red);">…and ${unmatched.length - 10} more unmatched</div>` : ''}
+    </div>
+  `;
+  document.getElementById('bulkApplyBtn').classList.toggle('hidden', matched.length === 0);
+  document.getElementById('bulkApplyBtn').textContent = `Add ${totalAdds} card${totalAdds===1?'':'s'}`;
+}
+
+async function applyBulkImport() {
+  const matched = bulkResolved.filter(r => r.match);
+  if (!matched.length) return;
+  let totalAdded = 0;
+  for (const r of matched) {
+    const c = r.match;
+    let key = r.foil ? 'f' : 'n';
+    if (key === 'f' && !hasFinish(c, 'foil')) key = 'n';
+    const cur = getEntry(c.id);
+    setEntry(c.id, { [key]: (cur[key] || 0) + r.count });
+    totalAdded += r.count;
+  }
+  // Refresh visible tiles
+  renderGrid();
+  toast(`Added ${totalAdded} card${totalAdded===1?'':'s'}`);
+  hideSheets();
+}
+
 document.getElementById('clearAll').addEventListener('click', async () => {
   if (!confirm('Reset everything? This wipes the shared collection on the server. Cannot be undone.')) return;
   collection = {}; saveCollectionCache(); renderGrid();

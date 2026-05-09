@@ -412,9 +412,10 @@
   </div>
   <h3>Backup</h3>
   <div class="opts">
-    <button class="opt" id="exportBtn">Export collection</button>
-    <button class="opt" id="importBtn">Import collection</button>
+    <button class="opt" id="exportBtn">Export (collection + decks)</button>
+    <button class="opt" id="importBtn">Import JSON file</button>
     <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+    <button class="opt" id="bulkPasteBtn">Bulk add from text/CSV</button>
   </div>
   <h3>View</h3>
   <div class="opts">
@@ -484,6 +485,29 @@
   <div id="scanBusy" class="scan-busy hidden">
     <div class="spinner"></div>
     <div id="scanBusyMsg">Identifying…</div>
+  </div>
+</div>
+
+<!-- Bulk paste import sheet -->
+<div class="sheet" id="bulkSheet">
+  <div class="grab"></div>
+  <h3>Bulk add from text</h3>
+  <div style="color:var(--fg2);font-size:12px;margin-bottom:8px;">
+    Paste a deck list, decklist export, or collection list. Supported lines:
+    <ul style="margin:6px 0;padding-left:18px;">
+      <li><code>1 Aang, the Last Airbender</code></li>
+      <li><code>2x Energybending (TLA) 2</code></li>
+      <li><code>1 Aang's Journey *F*</code> (foil)</li>
+      <li>Manabox/Deckbox CSV (Name, Set code, Quantity, Foil columns)</li>
+    </ul>
+    Cards not in the Avatar set will be skipped. Existing counts get incremented.
+  </div>
+  <textarea id="bulkInput" rows="10" style="width:100%;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:10px;font-family:ui-monospace,monospace;font-size:13px;" placeholder="1 Aang, the Last Airbender&#10;2x Energybending&#10;1 Aang's Journey *F*"></textarea>
+  <div id="bulkPreview" style="margin-top:10px;font-size:13px;"></div>
+  <div class="sheet-actions">
+    <button class="btn btn-secondary" id="bulkParseBtn">Preview</button>
+    <button class="btn btn-primary hidden" id="bulkApplyBtn">Apply</button>
+    <button class="btn btn-secondary" id="bulkCancelBtn">Close</button>
   </div>
 </div>
 
