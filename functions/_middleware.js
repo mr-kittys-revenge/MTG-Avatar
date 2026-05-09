@@ -22,6 +22,10 @@ export async function onRequest(context) {
     return withCors(res, request);
   }
 
+  // Live WebSocket route handles its own auth (via ?pwd= query param,
+  // since browsers can't send custom headers on WebSocket upgrade).
+  if (url.pathname === '/api/live') return next();
+
   // All other /api/* require valid shared password
   const provided = request.headers.get('X-App-Password');
   if (!provided || provided !== env.SHARED_PASSWORD) {

@@ -218,6 +218,26 @@
   .scan-result .actions button { flex: 1; padding: 8px; border-radius: 8px; background: var(--bg3); border: 1px solid var(--border); font-size: 12px; }
   .scan-result.error { background: #4a2222; border-color: #6a3333; }
 
+  /* Live conversation overlay */
+  .live-screen { position: fixed; inset: 0; background: #000; z-index: 160; overflow: hidden; display: flex; flex-direction: column; }
+  .live-screen video { flex: 1; width: 100%; object-fit: cover; min-height: 0; }
+  .live-screen.no-video { background: linear-gradient(180deg, #15171b, #0a0c0f); }
+  .live-screen.no-video video { display: none; }
+  .live-top { position: absolute; top: calc(12px + var(--safe-top)); left: 12px; right: 12px; display: flex; gap: 12px; align-items: center; z-index: 10; }
+  .live-status { background: rgba(0,0,0,0.7); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 12px; backdrop-filter: blur(8px); flex: 1; text-align: center; }
+  .live-status.live { background: var(--accent); color: #1a1d23; font-weight: 600; }
+  .live-status.error { background: var(--red); color: #fff; }
+  .live-mic-meter { position: absolute; left: 12px; right: 12px; top: calc(60px + var(--safe-top)); height: 4px; background: rgba(0,0,0,0.4); border-radius: 2px; overflow: hidden; z-index: 10; pointer-events: none; }
+  #liveMicBar { height: 100%; background: var(--accent); width: 0%; transition: width 0.08s linear; border-radius: 2px; }
+  .live-bottom { position: relative; padding: 12px 12px calc(12px + var(--safe-bot)); background: rgba(15, 17, 21, 0.92); backdrop-filter: blur(12px); border-top: 1px solid var(--border); max-height: 50vh; display: flex; flex-direction: column; }
+  .live-toggles { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+  .live-transcript { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5; overflow-y: auto; max-height: 200px; min-height: 60px; flex: 1; }
+  .live-transcript .turn { margin-bottom: 6px; }
+  .live-transcript .turn.you { color: var(--accent2); }
+  .live-transcript .turn.gemini { color: var(--accent); }
+  .live-transcript .turn.tool { color: var(--fg2); font-size: 11px; font-style: italic; }
+  .live-transcript .turn .who { font-weight: 700; margin-right: 6px; }
+
   /* Sync indicator */
   .sync-indicator { position: fixed; top: calc(8px + var(--safe-top)); right: 12px; z-index: 35; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 11px; backdrop-filter: blur(4px); display: flex; align-items: center; gap: 6px; pointer-events: none; }
   .sync-indicator.error { background: var(--red); }
@@ -252,6 +272,7 @@
   <div class="htop">
     <div class="search"><input id="q" type="search" placeholder="Search by name…" autocomplete="off"></div>
     <button class="icon-btn" id="filterBtn" title="Filters">⚙</button>
+    <button class="icon-btn" id="liveBtn" title="Talk to Gemini">🎙</button>
     <button class="icon-btn" id="scanBtn" title="Scan card">📷</button>
   </div>
   <div class="chips" id="chips"></div>
@@ -401,6 +422,29 @@
   <div id="scanBusy" class="scan-busy hidden">
     <div class="spinner"></div>
     <div id="scanBusyMsg">Identifying…</div>
+  </div>
+</div>
+
+<!-- Live conversation overlay -->
+<div id="liveScreen" class="live-screen hidden">
+  <video id="liveVideo" playsinline muted></video>
+  <canvas id="liveCanvas" style="display:none;"></canvas>
+  <div class="live-top">
+    <button class="icon-btn" id="liveClose">✕</button>
+    <div class="live-status" id="liveStatus">Connecting…</div>
+  </div>
+  <div class="live-mic-meter"><div id="liveMicBar"></div></div>
+  <div class="live-bottom">
+    <div class="live-toggles">
+      <label class="tog">
+        <input type="checkbox" id="liveCamera" checked><span>Camera</span>
+      </label>
+      <label class="tog">
+        <input type="checkbox" id="liveMic" checked><span>Mic</span>
+      </label>
+    </div>
+    <div class="live-transcript" id="liveTranscript"></div>
+    <button id="liveEnd" class="btn btn-secondary" style="width:100%;padding:12px;border-radius:10px;margin-top:8px;">End conversation</button>
   </div>
 </div>
 

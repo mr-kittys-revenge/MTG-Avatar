@@ -1135,6 +1135,471 @@ document.getElementById('explainAsk').addEventListener('click', async () => {
   }
 });
 
+// ============================================================
+// Live conversation mode (Gemini Live API via /api/live WebSocket relay)
+// ============================================================
+const LIVE_MODEL = 'models/gemini-3.1-flash-live-preview';
+const liveScreen = document.getElementById('liveScreen');
+const liveVideo = document.getElementById('liveVideo');
+const liveCanvas = document.getElementById('liveCanvas');
+const liveStatus = document.getElementById('liveStatus');
+const liveTranscript = document.getElementById('liveTranscript');
+const liveMicBar = document.getElementById('liveMicBar');
+const liveCameraToggle = document.getElementById('liveCamera');
+const liveMicToggle = document.getElementById('liveMic');
+
+let liveWs = null;
+let liveStream = null;
+let liveAudioCtx = null;        // 16kHz capture context
+let liveSource = null;
+let liveProcessor = null;
+let livePlayCtx = null;         // 24kHz playback context
+let livePlayNext = 0;
+let liveVideoTimer = null;
+let liveTranscriptCarry = { you: '', gemini: '' };
+
+document.getElementById('liveBtn').addEventListener('click', startLive);
+document.getElementById('liveClose').addEventListener('click', stopLive);
+document.getElementById('liveEnd').addEventListener('click', stopLive);
+
+liveMicToggle.addEventListener('change', () => {
+  if (!liveStream) return;
+  liveStream.getAudioTracks().forEach(t => t.enabled = liveMicToggle.checked);
+});
+liveCameraToggle.addEventListener('change', () => {
+  if (!liveStream) return;
+  liveStream.getVideoTracks().forEach(t => t.enabled = liveCameraToggle.checked);
+  liveScreen.classList.toggle('no-video', !liveCameraToggle.checked);
+});
+
+async function startLive() {
+  if (!getPassword()) { toast('Sign in first'); showLoginScreen(); return; }
+  if (liveWs) return;
+
+  liveScreen.classList.remove('hidden');
+  liveScreen.classList.remove('no-video');
+  setLiveStatus('Requesting camera + mic…', '');
+  liveTranscript.innerHTML = '';
+  liveTranscriptCarry = { you: '', gemini: '' };
+
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+  } catch (e) {
+    setLiveStatus('Camera/mic denied: ' + e.message, 'error');
+    return;
+  }
+  liveVideo.srcObject = liveStream;
+  await liveVideo.play().catch(() => {});
+
+  // Open WebSocket to our /api/live relay
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/api/live?pwd=${encodeURIComponent(getPassword())}`;
+  setLiveStatus('Connecting…', '');
+  try {
+    liveWs = new WebSocket(wsUrl);
+  } catch (e) {
+    setLiveStatus('WebSocket failed: ' + e.message, 'error');
+    return;
+  }
+  liveWs.binaryType = 'arraybuffer';
+
+  liveWs.addEventListener('open', () => {
+    sendSetup();
+    startMicCapture();
+    startVideoFrames();
+    setLiveStatus('Live · talking', 'live');
+  });
+  liveWs.addEventListener('message', onLiveMessage);
+  liveWs.addEventListener('close', (ev) => {
+    setLiveStatus(`Closed (${ev.code}) ${ev.reason || ''}`.trim(), ev.code === 1000 ? '' : 'error');
+    cleanupLive(false);
+  });
+  liveWs.addEventListener('error', () => {
+    setLiveStatus('Connection error', 'error');
+  });
+}
+
+function setLiveStatus(text, cls) {
+  liveStatus.textContent = text;
+  liveStatus.classList.remove('live', 'error');
+  if (cls) liveStatus.classList.add(cls);
+}
+
+function sendSetup() {
+  const summary = collectionSummary();
+  const sys = `You are a helpful conversational assistant inside a Magic: The Gathering collection-tracking app for the Avatar: The Last Airbender Universes Beyond release.
+
+The user's collection right now: ${summary}.
+
+You can use these tools to help the user:
+- find_card(query): search the 937-card catalog by name. Use this BEFORE add_card so you have the right card_id.
+- add_card(card_id, finish, count): increment a card in the user's collection. finish is "nonfoil" / "foil" / "etched". count defaults to 1.
+- set_wishlist(card_id, on): toggle wishlist for a card.
+- get_collection_summary(): get current totals and per-set completion.
+
+When the user shows you a card on camera and says they want to add it, identify it visually, call find_card to get the card_id, confirm the result with the user, then call add_card. Be concise — this is a voice conversation.
+
+If the user asks open questions about their collection ("do I have any blue cards?", "what's a good deck for…"), answer using your knowledge of MTG and what tools tell you.`;
+
+  liveWs.send(JSON.stringify({
+    setup: {
+      model: LIVE_MODEL,
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        },
+      },
+      systemInstruction: { parts: [{ text: sys }] },
+      tools: [{
+        functionDeclarations: [
+          {
+            name: 'find_card',
+            description: 'Search the Avatar set catalog by card name. Returns up to 5 matches with their IDs.',
+            parameters: {
+              type: 'OBJECT',
+              properties: { query: { type: 'STRING', description: 'Card name or partial name' } },
+              required: ['query'],
+            },
+          },
+          {
+            name: 'add_card',
+            description: "Increment a card in the user's collection.",
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                card_id: { type: 'STRING', description: 'Scryfall ID returned from find_card' },
+                finish: { type: 'STRING', description: '"nonfoil", "foil", or "etched". Default nonfoil.' },
+                count: { type: 'NUMBER', description: 'How many to add. Default 1.' },
+              },
+              required: ['card_id'],
+            },
+          },
+          {
+            name: 'set_wishlist',
+            description: 'Set or unset wishlist flag on a card.',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                card_id: { type: 'STRING' },
+                on: { type: 'BOOLEAN' },
+              },
+              required: ['card_id', 'on'],
+            },
+          },
+          {
+            name: 'get_collection_summary',
+            description: 'Return totals and per-set completion percentages.',
+            parameters: { type: 'OBJECT', properties: {} },
+          },
+        ],
+      }],
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+    },
+  }));
+}
+
+function collectionSummary() {
+  let owned = 0, total = 0, foils = 0;
+  for (const c of CARDS) {
+    const e = getEntry(c.id);
+    const has = e.n + e.f + e.e;
+    if (has) owned++;
+    total += has;
+    foils += e.f + e.e;
+  }
+  return `${owned} unique printings owned out of ${CARDS.length}, ${total} cards total (${foils} foil)`;
+}
+
+// --- Mic capture: 16kHz PCM little-endian → base64 → realtimeInput ---
+function startMicCapture() {
+  liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  liveSource = liveAudioCtx.createMediaStreamSource(liveStream);
+  // ScriptProcessorNode is deprecated but universally supported. Fine for MVP.
+  liveProcessor = liveAudioCtx.createScriptProcessor(4096, 1, 1);
+  liveProcessor.onaudioprocess = (ev) => {
+    if (!liveWs || liveWs.readyState !== 1) return;
+    const f32 = ev.inputBuffer.getChannelData(0);
+
+    // Resample if AudioContext didn't honor 16kHz
+    let out = f32;
+    if (liveAudioCtx.sampleRate !== 16000) {
+      out = downsample(f32, liveAudioCtx.sampleRate, 16000);
+    }
+
+    // Mic level for the meter
+    let peak = 0;
+    for (let i = 0; i < out.length; i++) { const a = Math.abs(out[i]); if (a > peak) peak = a; }
+    liveMicBar.style.width = Math.min(100, peak * 250) + '%';
+
+    const i16 = new Int16Array(out.length);
+    for (let i = 0; i < out.length; i++) {
+      const v = Math.max(-1, Math.min(1, out[i]));
+      i16[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
+    }
+    const b64 = bytesToBase64(new Uint8Array(i16.buffer));
+    liveWs.send(JSON.stringify({
+      realtimeInput: { audio: { data: b64, mimeType: 'audio/pcm;rate=16000' } },
+    }));
+  };
+  liveSource.connect(liveProcessor);
+  liveProcessor.connect(liveAudioCtx.destination);
+}
+
+function downsample(f32, fromRate, toRate) {
+  if (fromRate === toRate) return f32;
+  const ratio = fromRate / toRate;
+  const len = Math.floor(f32.length / ratio);
+  const out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const idx = i * ratio;
+    const lo = Math.floor(idx), hi = Math.min(lo + 1, f32.length - 1);
+    const frac = idx - lo;
+    out[i] = f32[lo] * (1 - frac) + f32[hi] * frac;
+  }
+  return out;
+}
+
+// --- Camera frames: 1 FPS, JPEG, base64 ---
+function startVideoFrames() {
+  liveVideoTimer = setInterval(() => {
+    if (!liveWs || liveWs.readyState !== 1) return;
+    if (!liveCameraToggle.checked) return;
+    if (!liveVideo.videoWidth) return;
+    const W = 640, H = Math.round(liveVideo.videoHeight * 640 / liveVideo.videoWidth);
+    liveCanvas.width = W; liveCanvas.height = H;
+    const ctx = liveCanvas.getContext('2d');
+    ctx.drawImage(liveVideo, 0, 0, W, H);
+    const dataUrl = liveCanvas.toDataURL('image/jpeg', 0.7);
+    const b64 = dataUrl.split(',', 2)[1];
+    liveWs.send(JSON.stringify({
+      realtimeInput: { video: { data: b64, mimeType: 'image/jpeg' } },
+    }));
+  }, 1000);
+}
+
+// --- Audio playback: receive 24kHz PCM and queue ---
+function ensurePlayCtx() {
+  if (!livePlayCtx) {
+    livePlayCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    livePlayNext = livePlayCtx.currentTime;
+  }
+  // Some browsers require a user gesture; click-triggered start handles that.
+  if (livePlayCtx.state === 'suspended') livePlayCtx.resume();
+  return livePlayCtx;
+}
+
+function playPcm(int16) {
+  const ctx = ensurePlayCtx();
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 0x8000;
+  const buf = ctx.createBuffer(1, f32.length, 24000);
+  buf.getChannelData(0).set(f32);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  const now = ctx.currentTime;
+  const startAt = Math.max(now, livePlayNext);
+  src.start(startAt);
+  livePlayNext = startAt + f32.length / 24000;
+}
+
+// --- Incoming messages ---
+async function onLiveMessage(ev) {
+  const text = ev.data instanceof ArrayBuffer
+    ? new TextDecoder().decode(ev.data)
+    : (ev.data instanceof Blob ? await ev.data.text() : ev.data);
+  let msg;
+  try { msg = JSON.parse(text); } catch { return; }
+
+  if (msg.relay_error) {
+    setLiveStatus('Relay: ' + msg.relay_error, 'error');
+    return;
+  }
+  if (msg.setupComplete) {
+    return;
+  }
+  if (msg.serverContent) {
+    const sc = msg.serverContent;
+    if (sc.modelTurn?.parts) {
+      for (const p of sc.modelTurn.parts) {
+        if (p.inlineData?.mimeType?.startsWith('audio/pcm')) {
+          const bytes = base64ToBytes(p.inlineData.data);
+          const i16 = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+          playPcm(i16);
+        }
+        if (p.text) appendTranscriptStream('gemini', p.text);
+      }
+    }
+    if (sc.outputTranscription?.text) {
+      appendTranscriptStream('gemini', sc.outputTranscription.text);
+    }
+    if (sc.inputTranscription?.text) {
+      appendTranscriptStream('you', sc.inputTranscription.text);
+    }
+    if (sc.turnComplete) flushTranscript();
+  }
+  if (msg.toolCall) {
+    handleLiveToolCall(msg.toolCall);
+  }
+}
+
+function appendTranscriptStream(who, delta) {
+  // Streaming deltas: accumulate, render the running line.
+  liveTranscriptCarry[who] += delta;
+  let line = liveTranscript.querySelector(`.turn.${who}.streaming`);
+  if (!line) {
+    line = document.createElement('div');
+    line.className = `turn ${who} streaming`;
+    line.innerHTML = `<span class="who">${who === 'you' ? 'You' : 'Gemini'}:</span><span class="txt"></span>`;
+    liveTranscript.appendChild(line);
+  }
+  line.querySelector('.txt').textContent = liveTranscriptCarry[who];
+  liveTranscript.scrollTop = liveTranscript.scrollHeight;
+}
+
+function flushTranscript() {
+  liveTranscript.querySelectorAll('.turn.streaming').forEach(el => el.classList.remove('streaming'));
+  liveTranscriptCarry = { you: '', gemini: '' };
+}
+
+function appendTranscriptInfo(text) {
+  const el = document.createElement('div');
+  el.className = 'turn tool';
+  el.textContent = text;
+  liveTranscript.appendChild(el);
+  liveTranscript.scrollTop = liveTranscript.scrollHeight;
+}
+
+// --- Tool calls from Gemini ---
+function handleLiveToolCall(tc) {
+  const responses = [];
+  for (const call of (tc.functionCalls || [])) {
+    let result;
+    try {
+      result = executeLiveTool(call.name, call.args || {});
+    } catch (e) {
+      result = { error: e.message };
+    }
+    appendTranscriptInfo(`tool: ${call.name}(${JSON.stringify(call.args || {})}) → ${truncate(JSON.stringify(result), 80)}`);
+    responses.push({ name: call.name, id: call.id, response: { result } });
+  }
+  if (liveWs && liveWs.readyState === 1) {
+    liveWs.send(JSON.stringify({ toolResponse: { functionResponses: responses } }));
+  }
+}
+
+function executeLiveTool(name, args) {
+  switch (name) {
+    case 'find_card': {
+      const q = String(args.query || '').toLowerCase().trim();
+      if (!q) return { matches: [] };
+      const exact = CARDS.filter(c => c.name.toLowerCase() === q);
+      const partial = CARDS.filter(c => c.name.toLowerCase() !== q && c.name.toLowerCase().includes(q));
+      const list = [...exact, ...partial].slice(0, 6);
+      return {
+        matches: list.map(c => {
+          const e = getEntry(c.id);
+          return {
+            card_id: c.id,
+            name: c.name,
+            set: c.set.toUpperCase(),
+            collector_number: c.collector_number,
+            rarity: c.rarity,
+            mana_cost: c.mana_cost || null,
+            type_line: c.type_line || null,
+            owned: { nonfoil: e.n, foil: e.f, etched: e.e, wishlist: e.w },
+          };
+        }),
+      };
+    }
+    case 'add_card': {
+      const card = CARDS.find(c => c.id === args.card_id);
+      if (!card) return { error: `No card with id ${args.card_id}` };
+      const finish = args.finish || 'nonfoil';
+      const key = finish === 'foil' ? 'f' : finish === 'etched' ? 'e' : 'n';
+      const cur = getEntry(card.id);
+      const inc = Math.max(1, Math.round(args.count || 1));
+      setEntry(card.id, { [key]: (cur[key] || 0) + inc });
+      refreshCardEl(card.id);
+      const e = getEntry(card.id);
+      return { ok: true, name: card.name, set: card.set.toUpperCase(), totals: { nonfoil: e.n, foil: e.f, etched: e.e } };
+    }
+    case 'set_wishlist': {
+      const card = CARDS.find(c => c.id === args.card_id);
+      if (!card) return { error: `No card with id ${args.card_id}` };
+      setEntry(card.id, { w: !!args.on });
+      refreshCardEl(card.id);
+      return { ok: true, name: card.name, wishlist: !!args.on };
+    }
+    case 'get_collection_summary': {
+      const result = { sets: {}, total_owned_unique: 0, total_cards: 0, total_foils: 0, wishlist: 0 };
+      for (const s of SET_ORDER) {
+        const inSet = CARDS.filter(c => c.set === s);
+        const owned = inSet.filter(c => cardOwned(c.id)).length;
+        if (inSet.length) result.sets[s] = { name: SET_NAMES[s] || s, owned, total: inSet.length, pct: Math.round(owned / inSet.length * 100) };
+      }
+      for (const c of CARDS) {
+        const e = getEntry(c.id);
+        if (e.n + e.f + e.e) result.total_owned_unique++;
+        result.total_cards += e.n + e.f + e.e;
+        result.total_foils += e.f + e.e;
+        if (e.w) result.wishlist++;
+      }
+      return result;
+    }
+    default:
+      return { error: `Unknown tool: ${name}` };
+  }
+}
+
+function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function stopLive() {
+  if (liveWs) {
+    try { liveWs.close(1000, 'user ended'); } catch {}
+  }
+  cleanupLive(true);
+  liveScreen.classList.add('hidden');
+}
+
+function cleanupLive(closeWs) {
+  if (closeWs && liveWs) { try { liveWs.close(); } catch {} }
+  liveWs = null;
+
+  if (liveProcessor) { try { liveProcessor.disconnect(); } catch {} liveProcessor = null; }
+  if (liveSource) { try { liveSource.disconnect(); } catch {} liveSource = null; }
+  if (liveAudioCtx) { try { liveAudioCtx.close(); } catch {} liveAudioCtx = null; }
+  if (livePlayCtx) { try { livePlayCtx.close(); } catch {} livePlayCtx = null; livePlayNext = 0; }
+  if (liveVideoTimer) { clearInterval(liveVideoTimer); liveVideoTimer = null; }
+
+  if (liveStream) {
+    liveStream.getTracks().forEach(t => t.stop());
+    liveStream = null;
+  }
+  liveVideo.srcObject = null;
+  liveMicBar.style.width = '0%';
+}
+
 // ----- PWA service worker -----
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
