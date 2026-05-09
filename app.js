@@ -1571,8 +1571,9 @@ function renderDeck(deck, unsaved) {
       <span class="deck-stat"><strong>${ownedCount}</strong> owned</span>
       <span class="deck-stat" style="color:${missingCount?'var(--red)':'var(--green)'};"><strong>${missingCount}</strong> need to acquire</span>
     </div>
+    ${missingCount > 0 ? `<button class="btn btn-secondary" id="deckWishlistMissing" style="width:100%;padding:10px;border-radius:10px;margin:6px 0 4px;font-size:13px;color:var(--accent2);">★ Add ${missingCount} missing card${missingCount===1?'':'s'} to wishlist</button>` : ''}
     ${groupHtml}
-    ${missingRec ? `<div class="deck-section">Recommended additions</div><div class="deck-cards">${missingRec}</div>` : ''}
+    ${missingRec ? `<div class="deck-section">Recommended additions <span style="color:var(--fg2);font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;">— from outside the Avatar set, manage manually</span></div><div class="deck-cards">${missingRec}</div>` : ''}
     ${deck.strategy ? `<div class="deck-section">Strategy</div><div class="deck-strategy">${escapeHtml(deck.strategy)}</div>` : ''}
     <div class="sheet-actions">
       ${unsaved ? `<button class="btn btn-secondary" id="deckDiscard">Discard</button><button class="btn btn-primary" id="deckSave">Save deck</button>` : `<button class="btn btn-secondary" id="deckDoneBtn">Close</button>`}
@@ -1617,6 +1618,27 @@ function groupByRole(cards) {
 }
 
 function wireDeckResultButtons(deck, unsaved) {
+  const wishBtn = document.getElementById('deckWishlistMissing');
+  if (wishBtn) {
+    wishBtn.addEventListener('click', () => {
+      const missing = (deck.cards || []).filter(c => c.card_id && !c.is_basic_land && !deckCardOwned(c));
+      if (!missing.length) { toast('Nothing missing'); return; }
+      let added = 0, alreadyOn = 0;
+      for (const c of missing) {
+        const cur = getEntry(c.card_id);
+        if (cur.w) { alreadyOn++; continue; }
+        setEntry(c.card_id, { w: true });
+        refreshCardEl(c.card_id);
+        added++;
+      }
+      toast(added
+        ? `★ ${added} card${added===1?'':'s'} added to wishlist${alreadyOn?` (${alreadyOn} already on)`:''}`
+        : `All ${alreadyOn} already on wishlist`);
+      wishBtn.disabled = true;
+      wishBtn.style.opacity = '0.6';
+      wishBtn.textContent = `★ ${missing.length} on wishlist`;
+    });
+  }
   const save = document.getElementById('deckSave');
   if (save) {
     save.addEventListener('click', async () => {
