@@ -89,6 +89,7 @@ function savePrefs() {
   localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
 }
 
+let lastSyncError = '';
 async function syncFromServer() {
   setSyncStatus('Syncing…', false);
   try {
@@ -96,16 +97,24 @@ async function syncFromServer() {
     collection = data.collection || {};
     serverVersion = data.version || 0;
     lastServerSync = new Date();
+    lastSyncError = '';
     saveCollectionCache();
     renderGrid();
     setSyncStatus('Synced', false);
     setTimeout(() => hideSyncStatus(), 1500);
     return true;
   } catch (e) {
-    setSyncStatus('Offline · cached', true);
+    lastSyncError = (e && e.message) || String(e);
+    if (lastSyncError === 'unauthorized') {
+      // showLoginScreen already triggered inside apiFetch
+      return false;
+    }
+    console.warn('[sync] failed:', lastSyncError);
+    setSyncStatus('Offline · ' + truncateMsg(lastSyncError, 40), true);
     return false;
   }
 }
+function truncateMsg(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : s; }
 
 function getEntry(id) {
   return collection[id] || { n: 0, f: 0, e: 0, w: false, note: '' };
