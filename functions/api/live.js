@@ -30,7 +30,9 @@ export async function onRequest(context) {
   serverSide.accept();
 
   // Open outbound to Gemini Live.
-  const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
+  // NOTE: must use https:// not wss:// when calling fetch() from a Worker.
+  // The `Upgrade: websocket` header is what tells Cloudflare to perform the WS handshake.
+  const geminiUrl = `https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
 
   let upstream;
   try {
