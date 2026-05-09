@@ -48,8 +48,10 @@
   .icon-btn { width: 38px; height: 38px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--bg3); border: 1px solid var(--border); font-size: 18px; }
   .icon-btn:active { background: var(--border); }
   .icon-btn.active { background: var(--accent); color: #1a1d23; border-color: var(--accent); }
-  .search { flex: 1; }
-  .search input { width: 100%; }
+  .search { flex: 1; position: relative; display: flex; align-items: center; }
+  .search input { width: 100%; padding-right: 36px; }
+  .qscope { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; border-radius: 6px; background: var(--bg2); border: 1px solid var(--border); font-size: 11px; font-weight: 700; color: var(--fg2); }
+  .qscope.on { background: var(--accent); color: #1a1d23; border-color: var(--accent); }
 
   /* Stats bar */
   .stats { display: flex; gap: 8px; padding: 10px 12px; overflow-x: auto; scrollbar-width: none; }
@@ -290,6 +292,10 @@
   .deck-add-result .nm { flex:1; font-size:12px; }
   .deck-add-result .meta { font-size:10px; color:var(--fg2); font-family:monospace; }
 
+  /* Onboarding tips */
+  .ob-tip { display:flex; gap:10px; align-items:flex-start; padding:10px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; font-size:13px; line-height:1.4; }
+  .ob-ic { font-size:20px; flex-shrink:0; line-height:1.1; }
+
   /* Card image zoom overlay */
   .zoom-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 250; display: none; align-items: center; justify-content: center; touch-action: pinch-zoom; padding: 20px; }
   .zoom-bg.show { display: flex; }
@@ -336,9 +342,24 @@
   <span id="syncText">Syncing…</span>
 </div>
 
+<div id="onboardingScreen" class="loading-screen hidden" style="z-index: 230; align-items:flex-start; padding-top: 60px;">
+  <div style="max-width: 360px; width: 90vw; padding: 20px; display: flex; flex-direction: column; gap: 12px;">
+    <h2 style="margin:0; text-align:center;">Welcome 👋</h2>
+    <p style="color: var(--fg2); margin:0; line-height:1.5; text-align:center; font-size:13px;">
+      Tracking the Avatar: The Last Airbender MTG set, 937 unique cards. Here's the toolkit:
+    </p>
+    <div class="ob-tip"><span class="ob-ic">⚡</span><div><strong>Quick-add</strong> — toggle in the header, then tap any card image to +1 instantly.</div></div>
+    <div class="ob-tip"><span class="ob-ic">📷</span><div><strong>Scan</strong> — photograph one or many cards laid out flat. Gemini identifies them.</div></div>
+    <div class="ob-tip"><span class="ob-ic">🎙</span><div><strong>Talk</strong> — open a voice + camera session with Gemini. Ask about cards, build decks by voice.</div></div>
+    <div class="ob-tip"><span class="ob-ic">🃏</span><div><strong>Decks</strong> — More menu → Decks. Casual 60 or Commander, Gemini does the heavy lifting.</div></div>
+    <div class="ob-tip"><span class="ob-ic">⋯</span><div><strong>More menu</strong> — backups, bulk-add from a list, AI settings, sign out.</div></div>
+    <button class="btn btn-primary" id="onboardingDone" style="padding: 12px; margin-top:8px;">Got it — let's go</button>
+  </div>
+</div>
+
 <header>
   <div class="htop">
-    <div class="search"><input id="q" type="search" placeholder="Search by name…" autocomplete="off"></div>
+    <div class="search"><input id="q" type="search" placeholder="Search by name…" autocomplete="off"><button id="qScopeBtn" class="qscope" title="Search rules text too" type="button">N</button></div>
     <button class="icon-btn" id="filterBtn" title="Filters">⚙</button>
     <button class="icon-btn" id="quickAddBtn" title="Quick-add mode (tap a card to +1)">⚡</button>
     <button class="icon-btn" id="liveBtn" title="Talk to Gemini">🎙</button>
@@ -417,6 +438,10 @@
   <h3>Decks</h3>
   <div class="opts">
     <button class="opt" id="decksBtn">🃏 Decks &amp; deck builder</button>
+  </div>
+  <h3>Sharing</h3>
+  <div class="opts">
+    <button class="opt" id="shareWishlistBtn">📋 Copy wishlist as text</button>
   </div>
   <h3>AI</h3>
   <div class="opts">

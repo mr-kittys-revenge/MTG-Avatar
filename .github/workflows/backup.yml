@@ -1,0 +1,52 @@
+name: Daily KV backup
+
+# Pulls the full collection + decks JSON dump from the deployed app once a day
+# and stores it as a workflow artifact. Artifacts are retained for 90 days,
+# accessible from the Actions tab of the repo.
+#
+# REQUIRED REPO SECRETS (Settings → Secrets and variables → Actions):
+#   APP_URL       — full base URL, e.g. https://jewpapi.pages.dev
+#   APP_PASSWORD  — the SHARED_PASSWORD set on Cloudflare Pages
+
+on:
+  schedule:
+    - cron: '17 9 * * *'   # 09:17 UTC daily — odd minute to dodge GH spike at :00
+  workflow_dispatch: {}    # allow manual runs from the Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch backup
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ] || [ -z "${APP_PASSWORD:-}" ]; then
+            echo "::error::APP_URL or APP_PASSWORD secret not set"
+            exit 1
+          fi
+          curl -fsSL --max-time 30 \
+            -H "X-App-Password: $APP_PASSWORD" \
+            "$APP_URL/api/export" \
+            -o backup.json
+          ls -lh backup.json
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open('backup.json'))
+          coll = len(d.get('collection', {}))
+          decks = len(d.get('decks', {}))
+          print(f"backup OK: {coll} card entries, {decks} decks, exported {d.get('exportedAt')}")
+          if coll == 0 and decks == 0:
+              print("::warning::backup is empty — collection and decks both 0")
+          PY
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mtg-avatar-backup-${{ github.run_number }}-${{ github.run_attempt }}
+          path: backup.json
+          retention-days: 90
+          if-no-files-found: error

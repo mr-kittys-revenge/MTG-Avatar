@@ -65,6 +65,7 @@ let lastServerSync = null;
 
 const filters = {
   q: '',
+  qScope: 'name',    // 'name' or 'all' (name + oracle text + type line)
   status: 'any',     // any | owned | missing | wishlist | hasFoil | needFoil
   sets: new Set(),
   rarities: new Set(),
@@ -105,6 +106,8 @@ async function syncFromServer() {
     renderGrid();
     setSyncStatus('Synced', false);
     setTimeout(() => hideSyncStatus(), 1500);
+    // Warm the SW image cache for owned cards (fire-and-forget, low priority)
+    setTimeout(() => { try { precacheOwnedImages(); } catch {} }, 1500);
     return true;
   } catch (e) {
     lastSyncError = (e && e.message) || String(e);
@@ -191,7 +194,15 @@ function passesFilters(card) {
   const e = getEntry(card.id);
 
   if (filters.q) {
-    if (!card.name.toLowerCase().includes(filters.q)) return false;
+    const q = filters.q;
+    const inName = card.name.toLowerCase().includes(q);
+    if (filters.qScope === 'all') {
+      const inOracle = (card.oracle_text || '').toLowerCase().includes(q);
+      const inType = (card.type_line || '').toLowerCase().includes(q);
+      if (!inName && !inOracle && !inType) return false;
+    } else {
+      if (!inName) return false;
+    }
   }
 
   switch (filters.status) {
@@ -974,6 +985,81 @@ document.getElementById('q').addEventListener('input', (e) => {
   searchT = setTimeout(() => { filters.q = v; renderGrid(); }, 120);
 });
 
+// Search-scope toggle (N = name only / A = all text including oracle + type)
+const qScopeBtn = document.getElementById('qScopeBtn');
+function applyQScope() {
+  qScopeBtn.classList.toggle('on', filters.qScope === 'all');
+  qScopeBtn.textContent = filters.qScope === 'all' ? 'A' : 'N';
+  qScopeBtn.title = filters.qScope === 'all'
+    ? 'Searching name + rules text + type — tap to narrow to name only'
+    : 'Searching name only — tap to also search rules text';
+  document.getElementById('q').placeholder = filters.qScope === 'all'
+    ? 'Search name, rules text, type…' : 'Search by name…';
+}
+qScopeBtn.addEventListener('click', () => {
+  filters.qScope = filters.qScope === 'all' ? 'name' : 'all';
+  applyQScope();
+  if (filters.q) renderGrid();
+});
+applyQScope();
+
+// ----- Share wishlist -----
+function copyWishlistAsText() {
+  const wishCards = CARDS.filter(c => getEntry(c.id).w);
+  if (!wishCards.length) { toast('Wishlist is empty'); return; }
+  // De-dupe by oracle_id so foreign printings collapse to one line
+  const seen = new Set();
+  const lines = [`// MTG Avatar wishlist — ${wishCards.length} cards`];
+  for (const c of wishCards) {
+    const key = c.oracle_id || c.name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    lines.push(`1 ${c.name}`);
+  }
+  const text = lines.join('\n');
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(
+      () => toast(`Wishlist copied (${wishCards.length} cards)`),
+      () => window.prompt('Copy this wishlist:', text)
+    );
+  } else {
+    window.prompt('Copy this wishlist:', text);
+  }
+  hideSheets();
+}
+document.getElementById('shareWishlistBtn').addEventListener('click', copyWishlistAsText);
+
+// ----- Onboarding (first-run) -----
+const ONBOARDED_KEY = 'mtg-avatar-onboarded-v1';
+function maybeShowOnboarding() {
+  if (localStorage.getItem(ONBOARDED_KEY)) return;
+  document.getElementById('onboardingScreen').classList.remove('hidden');
+}
+document.getElementById('onboardingDone').addEventListener('click', () => {
+  localStorage.setItem(ONBOARDED_KEY, '1');
+  document.getElementById('onboardingScreen').classList.add('hidden');
+});
+
+// ----- Pre-cache owned card images -----
+// After collection sync, kick off a low-priority background fetch of every
+// owned card's small image so 'Owned' tab feels instant on first scroll.
+let _precacheStarted = false;
+function precacheOwnedImages() {
+  if (_precacheStarted) return;
+  _precacheStarted = true;
+  const owned = CARDS.filter(c => cardOwned(c.id));
+  const urls = owned.map(c => c.image_small).filter(Boolean);
+  if (!urls.length) { _precacheStarted = false; return; }
+  const concurrency = 4;
+  let i = 0;
+  const next = () => {
+    if (i >= urls.length) return;
+    const url = urls[i++];
+    fetch(url, { mode: 'no-cors', cache: 'force-cache' }).catch(() => {}).finally(next);
+  };
+  for (let n = 0; n < concurrency; n++) next();
+}
+
 // ----- Toast -----
 let toastT;
 function toast(msg) {
@@ -1017,6 +1103,7 @@ async function submitLogin() {
     hideLoginScreen();
     // Initial sync after login
     await syncFromServer();
+    maybeShowOnboarding();
   } catch (e) {
     err.textContent = 'Network error: ' + e.message;
   } finally {
@@ -1064,6 +1151,7 @@ async function boot() {
         showLoginScreen('Session expired. Please sign in again.');
       } else {
         await syncFromServer();
+        maybeShowOnboarding();
       }
     }
     startBackgroundSync();

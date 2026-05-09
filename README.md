@@ -1,89 +1,152 @@
 # Avatar: The Last Airbender — MTG Set Tracker
 
-Mobile-friendly tracker for the Avatar Universes Beyond MTG set. **937 unique printings** across 9 sub-sets (main, eternal, promos, jumpstart, art series, tokens, beginner box).
+Mobile-first tracker for the Avatar Universes Beyond MTG set. **937 unique printings** across 9 sub-sets (main, eternal, promos, jumpstart, art series, tokens, beginner box). Built for two-person households who want a shared collection that syncs in real time.
 
-Production deploy lives at **https://mtg.franklinmerritt.com** (after Cloudflare setup).
-See **[CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md)** for first-time deployment.
+Production deploy: **https://jewpapi.pages.dev** (Cloudflare Pages).
 
-## Phase 3 (done) — Cloudflare backend + shared sync
+## What it does
 
-- **Shared cloud datastore**: collection state lives in Cloudflare KV; both partners see the same counts on every device
-- **Server-side Gemini**: API key is a Cloudflare secret, never exposed to the client. The Worker proxies camera-scan and explain calls.
-- **Password gate**: single shared password for the household (set in Cloudflare env vars)
-- **Optimistic UI**: +1 / wishlist toggles update instantly, sync to server in the background, indicator shows status
-- **Periodic resync**: every 30s when the app is foreground (and on app focus), pulls partner's latest changes
-- **Offline-tolerant**: cached collection in localStorage shows immediately; writes during a network glitch save locally and you'll see an "Offline · changes saved locally" indicator
-
-## Phase 1 (done) — local tracker
-
-- Card grid with images, search, filters, and sort
-- Tracks **nonfoil**, **foil**, and **etched-foil** quantities per printing
-- Wishlist toggle and per-card notes
-- Stats bar with overall + per-set completion %
-- JSON export/import for backup
-- Works offline once cached (PWA service worker)
-
-## Run it locally
-
-```
-cd ~/Documents/MTG-Avatar-Tracker
-python3 -m http.server 8765
-```
-
-Then open http://localhost:8765 in your browser.
-
-## Run on your phone (same Wi-Fi)
-
-1. Find your Mac's local IP: System Settings → Network → Wi-Fi → Details → TCP/IP
-2. On your phone, visit `http://<your-mac-ip>:8765`
-3. iOS Safari: Share → Add to Home Screen — installs as an app
-
-## Hosting (recommended for camera scanning)
-
-The camera in Phase 2 needs **HTTPS**, which `localhost` won't give you on a phone. Easiest options:
-
-- **GitHub Pages** (free): push this folder to a repo, enable Pages → instant HTTPS at `<user>.github.io/<repo>`
-- **Cloudflare Pages**, **Netlify**, **Vercel**: drag-and-drop deploy
-
-Once hosted, "Add to Home Screen" on iOS gives you a real app icon and full-screen mode.
-
-## Files
-
-| File | Purpose |
+| Capability | How |
 |---|---|
-| `index.html` | App shell + styles |
-| `app.js` | All app logic |
-| `cards.json` | 937 card records (Scryfall-sourced, 813 KB) |
-| `manifest.json` | PWA manifest |
-| `sw.js` | Service worker (offline cache) |
-| `icon.svg` | App icon |
-| `scripts/fetch_cards.py` | Re-fetch card data from Scryfall |
+| **Track** every printing — nonfoil, foil, etched | +/- on each tile, or tap detail for notes/wishlist |
+| **Quick-add mode** for fast bootstrapping | ⚡ in header → tap any card to +1 |
+| **Bulk import** from text or CSV | More → Bulk add from text — supports plaintext deck-list format and Manabox/Deckbox CSV |
+| **Camera scan** (single or fanned multi-card) | 📷 in header — Gemini reads cards from a photo |
+| **Live conversation mode** with voice + camera | 🎙 in header — uses Gemini Live API (`gemini-3.1-flash-live-preview`); shows tap-to-add card panels |
+| **Deck builder** (Casual 60 or Commander) | More → Decks → Build me a deck — Gemini drafts a list from your owned cards |
+| **Deck editing** | Open a saved deck → Edit → +/-/✕ per card, search-add new cards, save |
+| **Wishlist + sharing** | Star button per card; More → Copy wishlist as text for shopping lists |
+| **"Explain this card"** with follow-ups | ✨ button in card detail modal |
+| **Search** by name, or by name + rules text + type | Search bar — tap **N**/**A** scope toggle |
+| **Image zoom** in card detail | Tap the big card image |
+| **Filters / sort** | Gear icon — set, color, rarity, status, sort |
+| **Per-set completion stats** | Stats bar above the grid |
+| **Shared cloud datastore** with periodic resync | Cloudflare KV; pulls every 30s + on focus |
+| **Offline-tolerant** with cached state | PWA service worker caches shell + images |
+| **Daily automated backups** | GitHub Actions workflow → uploads JSON snapshot to artifacts |
+| **Manual JSON export/import** | More → Export / Import; round-trips collection + decks |
+
+## Architecture
+
+```
+┌────────────────────────────────────┐
+│  Static SPA (HTML / JS / cards.json) │
+│  • Mobile-first, responsive          │
+│  • Service worker for offline + cache │
+│  • Quick-add, scan, decks, live, etc. │
+└──────────────┬─────────────────────┘
+               │ HTTPS, X-App-Password header
+               ▼
+┌────────────────────────────────────┐
+│  Cloudflare Pages Functions /api/* │
+│  • _middleware: auth + rate limit  │
+│  • auth, collection, decks, scan,   │
+│    explain, deck-build, live, export │
+└────────────┬───────────────┬───────┘
+             │               │
+             ▼               ▼
+       ┌────────────┐   ┌──────────────┐
+       │ Cloudflare │   │ Gemini API   │
+       │ KV         │   │ (REST + Live │
+       │ (state)    │   │  WebSocket)  │
+       └────────────┘   └──────────────┘
+```
+
+- **Frontend**: vanilla HTML + JS, no build step. Deployed as static files.
+- **Backend**: Cloudflare Pages Functions (one file per route in `functions/api/`). Auth + per-minute rate limiting in `functions/_middleware.js`.
+- **Storage**: one Cloudflare KV namespace bound as `COLLECTION`. Three keys: `collection` (card counts + wishlist + notes), `decks` (saved deck objects), `collection_meta` (versioning).
+- **AI**: Gemini API. REST for scan / explain / deck builder; Live (WebSocket) for the voice + camera conversational mode.
+- **Auth**: shared password gate. Set in Cloudflare env vars; entered once per device.
+- **Backups**: GitHub Actions workflow pulls `/api/export` daily, uploads as a 90-day artifact.
+
+## Production setup (one-time)
+
+See **[CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md)** for the click-by-click walkthrough.
+
+Required Cloudflare environment variables on the Pages project:
+
+| Name | Type | Value |
+|---|---|---|
+| `SHARED_PASSWORD` | Secret | password you and your partner share |
+| `GEMINI_API_KEY` | Secret | from https://aistudio.google.com/apikey |
+| `GEMINI_MODEL` | Plain | `gemini-2.5-flash` (cheap+fast for scan/explain) |
+| `GEMINI_MODEL_SMART` | Plain *(optional)* | `gemini-2.5-pro` or any Pro model — used by the deck builder for better reasoning |
+| `GEMINI_RATE_LIMIT` | Plain *(optional)* | per-minute global cap on Gemini calls; default 60 |
+
+Required Cloudflare bindings on the Pages project:
+
+| Variable | Type | Resource |
+|---|---|---|
+| `COLLECTION` | KV namespace | a KV namespace (we created one called `MTG_COLLECTION`) |
+
+## Backups
+
+The GitHub Actions workflow [`.github/workflows/backup.yml`](.github/workflows/backup.yml) runs daily at 09:17 UTC and uploads a snapshot as an artifact. To enable it, add two **repo secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `APP_URL` | `https://jewpapi.pages.dev` |
+| `APP_PASSWORD` | the same value as Cloudflare's `SHARED_PASSWORD` |
+
+Run it once manually via Actions tab → "Daily KV backup" → Run workflow to verify.
+
+To restore: download a backup artifact, then in the app go to More → Import JSON file.
+
+## Local development
+
+```bash
+git clone https://github.com/mr-kittys-revenge/MTG-Avatar.git
+cd MTG-Avatar
+python3 -m http.server 8765
+# open http://localhost:8765
+```
+
+Functions don't run with the static server — they only execute on Cloudflare's edge. To run them locally:
+
+```bash
+npm install -g wrangler
+cp .dev.vars.example .dev.vars       # then edit with your real keys
+wrangler pages dev .                  # http://localhost:8788
+```
 
 ## Refreshing card data
 
-Re-run `python3 scripts/fetch_cards.py` to pull the latest from Scryfall (e.g., if new promos drop).
+Card data is baked into `cards.json` from Scryfall. To update (e.g., new promos):
 
-## Phase 2 (done) — Gemini AI camera scanning + explanations
+```bash
+python3 scripts/fetch_cards.py
+git commit -am "Refresh card data"
+git push
+```
 
-- **Camera scan**: tap the camera icon in the header, frame a card, tap shutter. Gemini reads the title + set code + collector number and matches against the local catalog.
-- **Foil / Etched / Keep-open toggles** in the scan view. With "Keep open" checked, tap +1 and the scanner stays ready for the next card.
-- **Explain this card**: from any card detail, tap "✨ Explain this card" for a Gemini-written rules explanation tailored to your knowledge level.
-- **Bring your own key**: enter a free Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) in Settings (More → AI Settings). Stored only in your browser.
+## File map
 
-### Setting up Gemini
+| File | Purpose |
+|---|---|
+| `index.html` | App shell, all CSS |
+| `app.js` | All client logic (~1900 lines) |
+| `cards.json` | 937 cards from Scryfall (~1.1 MB) |
+| `sw.js` | Service worker — caches shell + Scryfall images, skips `/api/*` |
+| `manifest.json`, `icon.svg` | PWA install metadata |
+| `functions/_middleware.js` | Auth gate + Gemini rate limit |
+| `functions/api/auth.js` | Login |
+| `functions/api/collection.js` | GET / PUT / PATCH / DELETE shared card state |
+| `functions/api/decks.js` | GET / POST / PUT / DELETE saved decks |
+| `functions/api/scan.js` | Camera image → Gemini → identified cards |
+| `functions/api/explain.js` | Card → Gemini → rules / strategy explanation |
+| `functions/api/deck-build.js` | Owned cards + format/commander/vibe → Gemini → deck list |
+| `functions/api/live.js` | WebSocket relay between browser and Gemini Live |
+| `functions/api/export.js` | Full state dump for backup |
+| `.github/workflows/backup.yml` | Daily KV snapshot to GH artifact |
+| `scripts/fetch_cards.py` | Re-fetch card data from Scryfall |
 
-1. Go to https://aistudio.google.com/apikey, click **Create API key** (free)
-2. In the tracker: bottom bar → **More** → **⚙ AI Settings (Gemini)**
-3. Paste the key, hit **Send a test ping** to verify, then **Save**
+## Tips
 
-The free tier easily covers thousands of scans/month for personal use.
-
-### Camera notes
-
-- iOS/Android browsers require **HTTPS** (or localhost) for camera access. Once deployed to GitHub Pages, your phone can access the camera fine.
-- Best lighting + flat card on a contrasting background = best identification accuracy.
-- For variant treatments (showcase, borderless, etc.), make sure the bottom of the card with the collector number is in frame — that's how Gemini distinguishes printings.
+- **Stuck on a stale build?** Visit `https://jewpapi.pages.dev/?reset=1` once. It unregisters the service worker, clears caches + localStorage, and reloads. Sign in again.
+- **Bulk-flag a precon you own:** filter to `tle` (Eternal sub-set), turn on Quick-add, tap each tile.
+- **Build a better deck:** set `GEMINI_MODEL_SMART=gemini-2.5-pro` (or a 3.x Pro). Only the deck builder uses it — scan/explain stay on the cheaper Flash.
+- **Ripping foils:** in scan or quick-add, toggle the finish to Foil before tapping.
 
 ## Data attribution
 
-Card data and images: [Scryfall](https://scryfall.com). Images are loaded directly from Scryfall's CDN; no images are bundled.
+Card data and images come from [Scryfall](https://scryfall.com). Images are loaded directly from Scryfall's CDN; nothing is bundled in the repo.

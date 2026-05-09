@@ -32,6 +32,23 @@ export async function onRequest(context) {
     return json({ error: 'unauthorized' }, 401, request);
   }
 
+  // Rate limit Gemini-touching endpoints to protect the API key from
+  // runaway loops. Naive per-minute global counter — fine for two users.
+  const path = url.pathname;
+  if (path === '/api/scan' || path === '/api/explain' || path === '/api/deck-build') {
+    if (env.COLLECTION) {
+      const minute = Math.floor(Date.now() / 60000);
+      const key = `ratelimit:gemini:${minute}`;
+      const cur = parseInt(await env.COLLECTION.get(key)) || 0;
+      const limit = parseInt(env.GEMINI_RATE_LIMIT) || 60;
+      if (cur >= limit) {
+        return json({ error: `rate limit ${limit}/min exceeded — try again shortly` }, 429, request);
+      }
+      // Best-effort increment with TTL so the key cleans itself up.
+      await env.COLLECTION.put(key, String(cur + 1), { expirationTtl: 120 });
+    }
+  }
+
   const res = await next();
   return withCors(res, request);
 }
