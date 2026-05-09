@@ -1417,7 +1417,8 @@ async function onLiveMessage(ev) {
   try { msg = JSON.parse(text); } catch { return; }
 
   if (msg.relay_error) {
-    setLiveStatus('Relay: ' + msg.relay_error, 'error');
+    setLiveStatus('Relay error', 'error');
+    appendTranscriptInfo('Relay error: ' + msg.relay_error);
     return;
   }
   if (msg.setupComplete) {

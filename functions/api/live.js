@@ -35,15 +35,26 @@ export async function onRequest(context) {
   let upstream;
   try {
     const r = await fetch(geminiUrl, { headers: { Upgrade: 'websocket' } });
+
     if (r.status !== 101 || !r.webSocket) {
-      serverSide.send(JSON.stringify({ relay_error: `Gemini upgrade failed: HTTP ${r.status}` }));
+      // Try to read the body for a useful error message.
+      let bodyText = '';
+      try { bodyText = await r.text(); } catch {}
+      const detail = `HTTP ${r.status} ${r.statusText || ''} ${bodyText}`.trim().slice(0, 500);
+      console.log('[live] Gemini upgrade failed:', detail);
+      // Send error to client BEFORE closing so it's visible.
+      try { serverSide.send(JSON.stringify({ relay_error: 'Gemini upgrade failed: ' + detail })); } catch {}
+      // Brief delay to let the message flush before close
+      await new Promise(res => setTimeout(res, 50));
       serverSide.close(1011, 'Gemini upgrade failed');
       return new Response(null, { status: 101, webSocket: clientSide });
     }
     upstream = r.webSocket;
     upstream.accept();
   } catch (e) {
-    serverSide.send(JSON.stringify({ relay_error: 'Gemini connect threw: ' + e.message }));
+    console.log('[live] Gemini connect threw:', e?.message, e?.stack);
+    try { serverSide.send(JSON.stringify({ relay_error: 'Gemini connect threw: ' + (e?.message || e) })); } catch {}
+    await new Promise(res => setTimeout(res, 50));
     serverSide.close(1011, 'Gemini connect failed');
     return new Response(null, { status: 101, webSocket: clientSide });
   }
