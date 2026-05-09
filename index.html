@@ -254,6 +254,30 @@
   .live-card-panel .ic-btn.wish { color: var(--accent2); }
   .live-card-panel .ic-btn.dismiss { color: var(--fg2); }
 
+  /* Deck list & deck result */
+  .deck-row { display:flex; gap:10px; align-items:center; padding:10px; background:var(--bg3); border:1px solid var(--border); border-radius:10px; cursor:pointer; }
+  .deck-row:active { background: var(--border); }
+  .deck-row .info { flex:1; min-width:0; }
+  .deck-row .nm { font-weight:700; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .deck-row .meta { font-size:11px; color:var(--fg2); margin-top:2px; }
+  .deck-row .del { color: var(--red); font-size:18px; padding:0 6px; }
+  .deck-empty { color: var(--fg2); padding: 20px; text-align:center; font-size:13px; }
+  .deck-section { margin: 14px 0 6px; font-size:12px; color:var(--fg2); text-transform:uppercase; letter-spacing:0.5px; }
+  .deck-cards { display:flex; flex-direction:column; gap:6px; }
+  .deck-card { display:flex; gap:8px; align-items:center; padding:6px; background:var(--bg3); border-radius:8px; }
+  .deck-card img { width:40px; height:56px; object-fit:cover; border-radius:4px; flex-shrink:0; background: var(--bg2); }
+  .deck-card .info { flex:1; min-width:0; }
+  .deck-card .nm { font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .deck-card .reason { font-size:11px; color:var(--fg2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .deck-card .badge-have { background: var(--green); color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; }
+  .deck-card .badge-need { background: var(--red); color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; }
+  .deck-card .badge-basic { background: var(--bg2); color: var(--fg2); font-size:10px; padding:2px 6px; border-radius:4px; }
+  .deck-card .count { font-weight:700; color:var(--accent); font-size:13px; min-width:24px; text-align:right; }
+  .deck-strategy { background:var(--bg3); border-radius:10px; padding:12px; margin-top:8px; font-size:13px; line-height:1.55; white-space:pre-wrap; }
+  .deck-stats { display:flex; gap:8px; flex-wrap:wrap; margin: 6px 0 4px; }
+  .deck-stat { background: var(--bg3); border:1px solid var(--border); border-radius:8px; padding:4px 10px; font-size:11px; color:var(--fg2); }
+  .deck-stat strong { color: var(--fg); font-weight:700; }
+
   /* Sync indicator */
   .sync-indicator { position: fixed; top: calc(8px + var(--safe-top)); right: 12px; z-index: 35; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 11px; backdrop-filter: blur(4px); display: flex; align-items: center; gap: 6px; pointer-events: none; }
   .sync-indicator.error { background: var(--red); }
@@ -360,6 +384,10 @@
 <!-- More sheet -->
 <div class="sheet" id="moreSheet">
   <div class="grab"></div>
+  <h3>Decks</h3>
+  <div class="opts">
+    <button class="opt" id="decksBtn">🃏 Decks &amp; deck builder</button>
+  </div>
   <h3>AI</h3>
   <div class="opts">
     <button class="opt" id="settingsBtn">⚙ AI Settings (Gemini)</button>
@@ -438,6 +466,70 @@
   <div id="scanBusy" class="scan-busy hidden">
     <div class="spinner"></div>
     <div id="scanBusyMsg">Identifying…</div>
+  </div>
+</div>
+
+<!-- Decks sheet -->
+<div class="sheet" id="decksSheet">
+  <div class="grab"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+    <h3 style="margin:0;">Decks</h3>
+    <button class="btn btn-primary" id="newDeckBtn" style="padding:8px 12px;border-radius:8px;font-size:13px;">✨ Build me a deck</button>
+  </div>
+  <div id="decksList" style="display:flex;flex-direction:column;gap:8px;"></div>
+  <div class="sheet-actions">
+    <button class="btn btn-primary" id="closeDecks">Done</button>
+  </div>
+</div>
+
+<!-- Build a deck form -->
+<div class="sheet" id="deckFormSheet">
+  <div class="grab"></div>
+  <h3>Build a deck</h3>
+  <div style="color:var(--fg2);font-size:12px;margin-bottom:8px;">Gemini will build a deck using only the cards you own (basic lands are always available).</div>
+
+  <h3>Format</h3>
+  <div class="opts" id="formatOpts">
+    <button class="opt on" data-format="commander">Commander (100)</button>
+    <button class="opt" data-format="casual60">Casual 60</button>
+  </div>
+
+  <div id="commanderSection">
+    <h3>Commander <span style="color:var(--fg2);font-weight:400;font-size:12px;">(from your owned legendary creatures)</span></h3>
+    <select id="commanderSelect" style="width:100%;"></select>
+  </div>
+
+  <h3>Vibe</h3>
+  <div class="opts" id="vibeOpts">
+    <button class="opt on" data-vibe="auto">Let Gemini decide</button>
+    <button class="opt" data-vibe="aggro">Aggro</button>
+    <button class="opt" data-vibe="midrange">Midrange</button>
+    <button class="opt" data-vibe="control">Control</button>
+    <button class="opt" data-vibe="combo">Combo</button>
+    <button class="opt" data-vibe="ramp">Ramp / Big mana</button>
+  </div>
+
+  <h3>Theme <span style="color:var(--fg2);font-weight:400;font-size:12px;">(optional)</span></h3>
+  <input id="themeInput" type="text" placeholder='e.g. "spirits and tokens" or "Aang voltron"' style="width:100%;">
+
+  <div class="sheet-actions">
+    <button class="btn btn-secondary" id="cancelDeckForm">Cancel</button>
+    <button class="btn btn-primary" id="buildDeckBtn">Build it</button>
+  </div>
+</div>
+
+<!-- Deck result modal -->
+<div class="modal-bg" id="deckBg"></div>
+<div class="modal" id="deckModal">
+  <button class="modal-close" id="deckClose">✕</button>
+  <div class="modal-card" style="max-width:560px;">
+    <div class="modal-body" id="deckBody">
+      <div id="deckBuilding" class="hidden" style="text-align:center;padding:30px 0;">
+        <div class="spinner" style="margin:0 auto 12px;"></div>
+        <div style="color:var(--fg2);">Gemini is building your deck…</div>
+      </div>
+      <div id="deckResult"></div>
+    </div>
   </div>
 </div>
 

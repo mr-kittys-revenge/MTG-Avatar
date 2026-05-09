@@ -1234,6 +1234,358 @@ document.getElementById('explainAsk').addEventListener('click', async () => {
 });
 
 // ============================================================
+// Decks & deck builder
+// ============================================================
+let decks = {};
+const decksSheet = document.getElementById('decksSheet');
+const deckFormSheet = document.getElementById('deckFormSheet');
+const deckModal = document.getElementById('deckModal');
+const deckBg = document.getElementById('deckBg');
+const deckResultEl = document.getElementById('deckResult');
+const deckBuildingEl = document.getElementById('deckBuilding');
+
+const BASIC_LANDS = new Set(['plains', 'island', 'swamp', 'mountain', 'forest', 'wastes']);
+
+document.getElementById('decksBtn').addEventListener('click', async () => {
+  hideSheets();
+  await loadDecksFromServer();
+  renderDecksList();
+  showSheet(decksSheet);
+});
+document.getElementById('closeDecks').addEventListener('click', hideSheets);
+document.getElementById('newDeckBtn').addEventListener('click', () => {
+  hideSheets();
+  openDeckForm();
+});
+
+async function loadDecksFromServer() {
+  try {
+    const r = await apiFetch('/api/decks', { method: 'GET' });
+    decks = r.decks || {};
+  } catch (e) {
+    toast('Could not load decks: ' + e.message);
+  }
+}
+
+function renderDecksList() {
+  const list = document.getElementById('decksList');
+  const arr = Object.values(decks).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  if (!arr.length) {
+    list.innerHTML = `<div class="deck-empty">No decks yet. Tap "Build me a deck" to make one.</div>`;
+    return;
+  }
+  list.innerHTML = arr.map(d => {
+    const cardCount = (d.cards || []).reduce((sum, c) => sum + (c.count || 1), 0);
+    const cmdr = d.commander_id ? CARDS.find(c => c.id === d.commander_id) : null;
+    const fmtLabel = d.format === 'casual60' ? 'Casual 60' : 'Commander';
+    return `<div class="deck-row" data-id="${d.id}">
+      <div class="info">
+        <div class="nm">${escapeHtml(d.name)}</div>
+        <div class="meta">${fmtLabel} · ${cardCount} cards${cmdr ? ' · ' + escapeHtml(cmdr.name) : ''}${d.vibe && d.vibe !== 'auto' ? ' · ' + escapeHtml(d.vibe) : ''}</div>
+      </div>
+      <button class="del" data-id="${d.id}" title="Delete">🗑</button>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.deck-row').forEach(row => {
+    row.addEventListener('click', (ev) => {
+      if (ev.target.closest('.del')) return;
+      const id = row.dataset.id;
+      openDeckResult(decks[id]);
+    });
+  });
+  list.querySelectorAll('.del').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.id;
+      if (!confirm(`Delete "${decks[id]?.name}"?`)) return;
+      try {
+        await apiFetch('/api/decks?id=' + encodeURIComponent(id), { method: 'DELETE' });
+        delete decks[id];
+        renderDecksList();
+        toast('Deck deleted');
+      } catch (e) {
+        alert('Delete failed: ' + e.message);
+      }
+    });
+  });
+}
+
+// --- Build form ---
+let deckFormState = { format: 'commander', vibe: 'auto' };
+
+function openDeckForm() {
+  // Populate commander dropdown from owned legendary creatures
+  const owned = CARDS.filter(c => cardOwned(c.id) && /Legendary.*Creature/i.test(c.type_line || ''));
+  owned.sort((a, b) => a.name.localeCompare(b.name));
+  const sel = document.getElementById('commanderSelect');
+  if (!owned.length) {
+    sel.innerHTML = `<option value="">No owned legendary creatures yet</option>`;
+  } else {
+    sel.innerHTML = owned.map(c => `<option value="${c.id}">${escapeHtml(c.name)} — ${c.set.toUpperCase()} #${c.collector_number}</option>`).join('');
+  }
+  // Default state
+  deckFormState = { format: 'commander', vibe: 'auto' };
+  document.querySelectorAll('#formatOpts button').forEach(b => b.classList.toggle('on', b.dataset.format === 'commander'));
+  document.querySelectorAll('#vibeOpts button').forEach(b => b.classList.toggle('on', b.dataset.vibe === 'auto'));
+  document.getElementById('themeInput').value = '';
+  document.getElementById('commanderSection').classList.remove('hidden');
+  showSheet(deckFormSheet);
+}
+
+document.querySelectorAll('#formatOpts button').forEach(b => {
+  b.addEventListener('click', () => {
+    deckFormState.format = b.dataset.format;
+    document.querySelectorAll('#formatOpts button').forEach(x => x.classList.toggle('on', x === b));
+    document.getElementById('commanderSection').classList.toggle('hidden', deckFormState.format !== 'commander');
+  });
+});
+document.querySelectorAll('#vibeOpts button').forEach(b => {
+  b.addEventListener('click', () => {
+    deckFormState.vibe = b.dataset.vibe;
+    document.querySelectorAll('#vibeOpts button').forEach(x => x.classList.toggle('on', x === b));
+  });
+});
+
+document.getElementById('cancelDeckForm').addEventListener('click', hideSheets);
+document.getElementById('buildDeckBtn').addEventListener('click', async () => {
+  const format = deckFormState.format;
+  const vibe = deckFormState.vibe;
+  const theme = document.getElementById('themeInput').value.trim();
+  let commander = null;
+  if (format === 'commander') {
+    const cmdrId = document.getElementById('commanderSelect').value;
+    if (!cmdrId) { toast('Pick a commander or switch to Casual 60'); return; }
+    commander = slimForPrompt(CARDS.find(c => c.id === cmdrId));
+  }
+  hideSheets();
+  await runDeckBuild({ format, commander, vibe, theme });
+});
+
+function slimForPrompt(c) {
+  if (!c) return null;
+  const e = getEntry(c.id);
+  return {
+    card_id: c.id,
+    name: c.name,
+    set: c.set,
+    collector_number: c.collector_number,
+    rarity: c.rarity,
+    mana_cost: c.mana_cost,
+    cmc: c.cmc,
+    type_line: c.type_line,
+    oracle_text: c.oracle_text,
+    power: c.power,
+    toughness: c.toughness,
+    color_identity: c.color_identity,
+    owned: { n: e.n, f: e.f, e: e.e },
+  };
+}
+
+async function runDeckBuild({ format, commander, vibe, theme }) {
+  // Open the result modal in "building" state
+  deckResultEl.innerHTML = '';
+  deckBuildingEl.classList.remove('hidden');
+  document.getElementById('deckClose').classList.remove('hidden');
+  deckModal.classList.add('show');
+  deckBg.classList.add('show');
+
+  // Build the owned-cards list from the user's collection. Exclude tokens, art series, and tokens-only sets.
+  const ownedList = CARDS
+    .filter(c => cardOwned(c.id))
+    .filter(c => !/^Token\b/i.test(c.type_line || ''))
+    .filter(c => !['ttla', 'ttle', 'atla', 'atle'].includes(c.set))
+    .map(slimForPrompt);
+
+  let payload = { format, commander, vibe, theme, owned: ownedList, format_size: format === 'commander' ? 100 : 60 };
+
+  try {
+    const r = await apiFetch('/api/deck-build', { method: 'POST', body: JSON.stringify(payload) });
+    const built = r.deck;
+    if (!built || !Array.isArray(built.cards)) throw new Error('Bad response from Gemini');
+
+    // Resolve each card to a local catalog entry by name+set+number
+    const resolved = built.cards.map(c => resolveDeckCard(c));
+    const deck = {
+      id: 'deck_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now()),
+      name: built.name || (commander ? commander.name + ' deck' : 'New deck'),
+      format,
+      commander_id: commander ? commander.card_id : null,
+      vibe, theme,
+      cards: resolved,
+      strategy: built.strategy || '',
+      missing_recommended: built.missing_recommended || [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    deckBuildingEl.classList.add('hidden');
+    openDeckResult(deck, /*unsaved=*/true);
+  } catch (e) {
+    deckBuildingEl.classList.add('hidden');
+    deckResultEl.innerHTML = `<div style="color:var(--red);padding:12px 0;">Build failed: ${escapeHtml(e.message)}</div><div class="sheet-actions"><button class="btn btn-secondary" id="deckRetryClose">Close</button></div>`;
+    document.getElementById('deckRetryClose').addEventListener('click', closeDeckModal);
+  }
+}
+
+function resolveDeckCard(c) {
+  const name = (c.name || '').toLowerCase().trim();
+  const set = (c.set || '').toLowerCase().trim();
+  const cn = String(c.collector_number || '').replace(/^0+/, '');
+
+  // Basic land?
+  if (BASIC_LANDS.has(name)) {
+    return { ...c, card_id: null, is_basic_land: true };
+  }
+
+  // Try exact set + collector number
+  if (set && cn) {
+    const exact = CARDS.find(x => x.set === set && String(x.collector_number).replace(/^0+/, '') === cn);
+    if (exact) return { ...c, card_id: exact.id, name: exact.name, set: exact.set, collector_number: exact.collector_number };
+  }
+
+  // Fallback: name match (prefer a printing the user owns)
+  const namedAll = CARDS.filter(x => x.name.toLowerCase() === name);
+  if (namedAll.length) {
+    const ownedMatch = namedAll.find(x => cardOwned(x.id));
+    const pick = ownedMatch || namedAll[0];
+    return { ...c, card_id: pick.id, name: pick.name, set: pick.set, collector_number: pick.collector_number };
+  }
+
+  // Couldn't match
+  return { ...c, card_id: null, unmatched: true };
+}
+
+// --- Deck result rendering ---
+function openDeckResult(deck, unsaved) {
+  if (!deck) return;
+  deckBuildingEl.classList.add('hidden');
+  deckResultEl.innerHTML = renderDeck(deck, !!unsaved);
+  deckModal.classList.add('show');
+  deckBg.classList.add('show');
+  wireDeckResultButtons(deck, !!unsaved);
+}
+
+function renderDeck(deck, unsaved) {
+  const cards = deck.cards || [];
+  const totalCount = cards.reduce((s, c) => s + (c.count || 1), 0);
+  const ownedCount = cards.reduce((s, c) => s + (deckCardOwned(c) ? (c.count || 1) : 0), 0);
+  const missingCount = totalCount - ownedCount;
+
+  const groups = groupByRole(cards);
+  const order = ['commander', 'creature', 'spell', 'ramp', 'removal', 'draw', 'utility', 'land', 'other'];
+  const groupHtml = order
+    .filter(role => groups[role] && groups[role].length)
+    .map(role => `
+      <div class="deck-section">${cap(role)} <span style="color:var(--fg);">· ${groups[role].reduce((s,c)=>s+(c.count||1),0)} cards</span></div>
+      <div class="deck-cards">
+        ${groups[role].map(c => deckCardHtml(c)).join('')}
+      </div>
+    `).join('');
+
+  const missingRec = (deck.missing_recommended || []).map(m => `
+    <div class="deck-card">
+      <div class="info">
+        <div class="nm">${escapeHtml(m.name)}</div>
+        <div class="reason">${escapeHtml(m.reason || '')}</div>
+      </div>
+      <span class="badge-need">add</span>
+    </div>
+  `).join('');
+
+  const fmtLabel = deck.format === 'casual60' ? 'Casual 60' : 'Commander';
+  const cmdr = deck.commander_id ? CARDS.find(c => c.id === deck.commander_id) : null;
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <div style="flex:1;">
+        <h2 contenteditable="true" id="deckNameEdit" style="margin:0;">${escapeHtml(deck.name)}</h2>
+        <div class="sub">${fmtLabel}${cmdr ? ' · ' + escapeHtml(cmdr.name) : ''}${deck.vibe && deck.vibe !== 'auto' ? ' · ' + escapeHtml(deck.vibe) : ''}</div>
+      </div>
+    </div>
+    <div class="deck-stats">
+      <span class="deck-stat"><strong>${totalCount}</strong> cards</span>
+      <span class="deck-stat"><strong>${ownedCount}</strong> owned</span>
+      <span class="deck-stat" style="color:${missingCount?'var(--red)':'var(--green)'};"><strong>${missingCount}</strong> need to acquire</span>
+    </div>
+    ${groupHtml}
+    ${missingRec ? `<div class="deck-section">Recommended additions</div><div class="deck-cards">${missingRec}</div>` : ''}
+    ${deck.strategy ? `<div class="deck-section">Strategy</div><div class="deck-strategy">${escapeHtml(deck.strategy)}</div>` : ''}
+    <div class="sheet-actions">
+      ${unsaved ? `<button class="btn btn-secondary" id="deckDiscard">Discard</button><button class="btn btn-primary" id="deckSave">Save deck</button>` : `<button class="btn btn-secondary" id="deckDoneBtn">Close</button>`}
+    </div>
+  `;
+}
+
+function deckCardOwned(c) {
+  if (c.is_basic_land) return true;
+  if (!c.card_id) return false;
+  const e = getEntry(c.card_id);
+  return (e.n + e.f + e.e) >= (c.count || 1);
+}
+
+function deckCardHtml(c) {
+  const card = c.card_id ? CARDS.find(x => x.id === c.card_id) : null;
+  const img = card ? card.image_small : '';
+  const owned = deckCardOwned(c);
+  const badge = c.is_basic_land
+    ? '<span class="badge-basic">basic</span>'
+    : owned ? '<span class="badge-have">have</span>' : '<span class="badge-need">need</span>';
+  return `<div class="deck-card">
+    ${img ? `<img src="${img}" alt="">` : `<div style="width:40px;height:56px;background:var(--bg2);border-radius:4px;flex-shrink:0;"></div>`}
+    <div class="info">
+      <div class="nm">${escapeHtml(c.name)}</div>
+      <div class="reason">${escapeHtml(c.reason || '')}</div>
+    </div>
+    ${badge}
+    <div class="count">×${c.count || 1}</div>
+  </div>`;
+}
+
+function groupByRole(cards) {
+  const out = {};
+  for (const c of cards) {
+    let role = (c.role || 'other').toLowerCase();
+    if (c.is_basic_land || /\bLand\b/i.test(c.type_line || '')) role = 'land';
+    if (!out[role]) out[role] = [];
+    out[role].push(c);
+  }
+  return out;
+}
+
+function wireDeckResultButtons(deck, unsaved) {
+  const save = document.getElementById('deckSave');
+  if (save) {
+    save.addEventListener('click', async () => {
+      const editedName = document.getElementById('deckNameEdit')?.textContent.trim() || deck.name;
+      const toSave = { ...deck, name: editedName };
+      try {
+        save.disabled = true;
+        save.textContent = 'Saving…';
+        const r = await apiFetch('/api/decks', { method: 'POST', body: JSON.stringify({ deck: toSave }) });
+        decks[r.deck.id] = r.deck;
+        toast('Deck saved');
+        closeDeckModal();
+      } catch (e) {
+        save.disabled = false; save.textContent = 'Save deck';
+        alert('Save failed: ' + e.message);
+      }
+    });
+  }
+  const discard = document.getElementById('deckDiscard');
+  if (discard) discard.addEventListener('click', closeDeckModal);
+  const close = document.getElementById('deckDoneBtn');
+  if (close) close.addEventListener('click', closeDeckModal);
+}
+
+function closeDeckModal() {
+  deckModal.classList.remove('show');
+  deckBg.classList.remove('show');
+}
+deckBg.addEventListener('click', closeDeckModal);
+document.getElementById('deckClose').addEventListener('click', closeDeckModal);
+
+// ============================================================
 // Live conversation mode (Gemini Live API via /api/live WebSocket relay)
 // ============================================================
 const LIVE_MODEL = 'models/gemini-3.1-flash-live-preview';
