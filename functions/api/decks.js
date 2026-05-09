@@ -57,6 +57,23 @@ export async function onRequestPost({ request, env }) {
   return json({ ok: true, deck: clean });
 }
 
+// Full replace — used by import flow.
+export async function onRequestPut({ request, env }) {
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+  const incoming = body?.decks;
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+    return json({ error: 'decks must be an object keyed by id' }, 400);
+  }
+  const cleaned = {};
+  for (const [id, d] of Object.entries(incoming)) {
+    const c = sanitizeDeck({ ...d, id });
+    if (c) cleaned[c.id] = c;
+  }
+  await saveAll(env, cleaned);
+  return json({ ok: true, count: Object.keys(cleaned).length });
+}
+
 export async function onRequestDelete({ request, env }) {
   const url = new URL(request.url);
   const id = url.searchParams.get('id');

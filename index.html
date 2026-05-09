@@ -278,6 +278,13 @@
   .deck-stat { background: var(--bg3); border:1px solid var(--border); border-radius:8px; padding:4px 10px; font-size:11px; color:var(--fg2); }
   .deck-stat strong { color: var(--fg); font-weight:700; }
 
+  /* Card image zoom overlay */
+  .zoom-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 250; display: none; align-items: center; justify-content: center; touch-action: pinch-zoom; padding: 20px; }
+  .zoom-bg.show { display: flex; }
+  .zoom-bg img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+  .zoom-bg .zoom-close { position: absolute; top: calc(20px + var(--safe-top)); right: 20px; width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.15); color:#fff; font-size: 18px; display:flex; align-items:center; justify-content:center; backdrop-filter: blur(8px); }
+  .zoom-bg .zoom-hint { position: absolute; bottom: calc(20px + var(--safe-bot)); left: 50%; transform: translateX(-50%); color:rgba(255,255,255,0.7); font-size: 12px; background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 999px; }
+
   /* Quick-add mode banner + flash */
   .quick-add-banner { background: var(--accent); color: #1a1d23; text-align: center; font-size: 12px; font-weight: 700; padding: 6px 10px; letter-spacing: 0.3px; }
   .quick-add-banner .qa-finish { background: rgba(0,0,0,0.15); padding: 2px 8px; border-radius: 999px; margin-left: 6px; cursor: pointer; }
@@ -478,6 +485,13 @@
     <div class="spinner"></div>
     <div id="scanBusyMsg">Identifying…</div>
   </div>
+</div>
+
+<!-- Image zoom overlay -->
+<div id="zoomBg" class="zoom-bg">
+  <img id="zoomImg" alt="">
+  <button class="zoom-close" id="zoomClose">✕</button>
+  <div class="zoom-hint">Pinch to zoom · tap outside to close</div>
 </div>
 
 <!-- Decks sheet -->

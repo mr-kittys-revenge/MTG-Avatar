@@ -21,7 +21,9 @@ export async function onRequestPost({ request, env }) {
 
   const sys = makePrompt({ format, formatSize, commander, vibe, theme, ownedSummary });
 
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  // Deck building benefits from reasoning depth — prefer the "smart" model when set,
+  // fall back to the default Flash for cost.
+  const model = env.GEMINI_MODEL_SMART || env.GEMINI_MODEL || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
 
   const reqBody = {

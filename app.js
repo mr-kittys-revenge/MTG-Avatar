@@ -555,6 +555,21 @@ const modal = document.getElementById('modal');
 const modalBg = document.getElementById('modalBg');
 const modalCard = document.getElementById('modalCard');
 
+function showZoom(src) {
+  if (!src) return;
+  const bg = document.getElementById('zoomBg');
+  document.getElementById('zoomImg').src = src;
+  bg.classList.add('show');
+}
+function hideZoom() {
+  document.getElementById('zoomBg').classList.remove('show');
+  document.getElementById('zoomImg').src = '';
+}
+document.getElementById('zoomBg').addEventListener('click', (ev) => {
+  // Close on tap outside the image, or on the close button
+  if (ev.target.id === 'zoomBg' || ev.target.id === 'zoomClose' || ev.target.classList.contains('zoom-close')) hideZoom();
+});
+
 function openModal(card) {
   const e = getEntry(card.id);
   const showN = hasFinish(card, 'nonfoil');
@@ -562,7 +577,7 @@ function openModal(card) {
   const showE = hasFinish(card, 'etched');
 
   modalCard.innerHTML = `
-    <div class="img-big"><img src="${card.image_normal || card.image_small || ''}" alt="${escapeHtml(card.name)}"></div>
+    <div class="img-big" id="modalImgWrap"><img src="${card.image_normal || card.image_small || ''}" alt="${escapeHtml(card.name)}"></div>
     <div class="modal-body">
       <h2>${escapeHtml(card.name)}</h2>
       <div class="sub">${SET_NAMES[card.set] || card.set} (${card.set.toUpperCase()}) · #${card.collector_number} · ${cap(card.rarity)}${card.mana_cost ? ' · ' + escapeHtml(card.mana_cost) : ''}</div>
@@ -620,6 +635,13 @@ function openModal(card) {
 
   document.getElementById('mExplain').addEventListener('click', () => openExplain(card));
 
+  // Tap the big card image to open the zoom overlay
+  const imgWrap = document.getElementById('modalImgWrap');
+  if (imgWrap) {
+    imgWrap.style.cursor = 'zoom-in';
+    imgWrap.addEventListener('click', () => showZoom(card.image_normal || card.image_small));
+  }
+
   modal.classList.add('show');
   modalBg.classList.add('show');
 }
@@ -663,16 +685,24 @@ document.getElementById('toggleStats').addEventListener('click', () => {
   toast(prefs.showStats ? 'Stats shown' : 'Stats hidden');
 });
 
-document.getElementById('exportBtn').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), collection }, null, 2)],
-    { type: 'application/json' });
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  // Make sure we have the latest decks before exporting
+  try { await loadDecksFromServer(); } catch {}
+  const payload = {
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    collection,
+    decks,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `mtg-avatar-collection-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `mtg-avatar-${new Date().toISOString().slice(0,10)}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  toast('Exported');
+  const deckCount = Object.keys(decks || {}).length;
+  toast(`Exported · ${Object.keys(collection).length} cards · ${deckCount} deck${deckCount===1?'':'s'}`);
 });
 
 document.getElementById('importBtn').addEventListener('click', () => {
@@ -683,25 +713,55 @@ document.getElementById('importFile').addEventListener('change', async (ev) => {
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    const incoming = data.collection || data;
-    if (typeof incoming !== 'object') throw new Error('Bad format');
-    const ok = confirm(`Import ${Object.keys(incoming).length} entries? This replaces the shared collection on the server.`);
+
+    // Tolerate both v1 (just collection) and v2 (collection + decks) formats,
+    // and a raw collection object dropped in directly.
+    const incomingCollection = data.collection && typeof data.collection === 'object'
+      ? data.collection
+      : (typeof data === 'object' && !Array.isArray(data) && !data.version) ? data : null;
+    const incomingDecks = data.decks && typeof data.decks === 'object' ? data.decks : null;
+
+    if (!incomingCollection && !incomingDecks) throw new Error('Bad format — no collection or decks found');
+
+    const collCount = incomingCollection ? Object.keys(incomingCollection).length : 0;
+    const deckCount = incomingDecks ? Object.keys(incomingDecks).length : 0;
+    const summary = [
+      collCount ? `${collCount} card entries` : null,
+      deckCount ? `${deckCount} deck${deckCount===1?'':'s'}` : null,
+    ].filter(Boolean).join(' + ');
+    const ok = confirm(`Import ${summary}? This replaces the matching data on the server.`);
     if (!ok) return;
-    collection = incoming;
-    saveCollectionCache();
-    renderGrid();
+
     setSyncStatus('Uploading import…', false);
-    try {
-      await apiFetch('/api/collection', {
-        method: 'PUT',
-        body: JSON.stringify({ collection }),
-      });
+    let errs = [];
+
+    if (incomingCollection) {
+      collection = incomingCollection;
+      saveCollectionCache();
+      renderGrid();
+      try {
+        await apiFetch('/api/collection', { method: 'PUT', body: JSON.stringify({ collection }) });
+      } catch (e) { errs.push('collection: ' + e.message); }
+    }
+
+    if (incomingDecks) {
+      try {
+        const r = await apiFetch('/api/decks', { method: 'PUT', body: JSON.stringify({ decks: incomingDecks }) });
+        decks = incomingDecks;
+        if (typeof r?.count === 'number') {
+          // server may have rejected some — refresh from server for the canonical state
+          try { await loadDecksFromServer(); } catch {}
+        }
+      } catch (e) { errs.push('decks: ' + e.message); }
+    }
+
+    if (errs.length) {
+      toast('Imported locally — server sync had issues: ' + errs.join(' / '));
+      setSyncStatus('Offline · changes local only', true);
+    } else {
       toast('Import complete (synced)');
       setSyncStatus('Saved', false);
       setTimeout(hideSyncStatus, 1500);
-    } catch (e) {
-      toast('Imported locally — server sync failed: ' + e.message);
-      setSyncStatus('Offline · changes local only', true);
     }
     hideSheets();
   } catch (e) {
@@ -1572,6 +1632,7 @@ function renderDeck(deck, unsaved) {
       <span class="deck-stat" style="color:${missingCount?'var(--red)':'var(--green)'};"><strong>${missingCount}</strong> need to acquire</span>
     </div>
     ${missingCount > 0 ? `<button class="btn btn-secondary" id="deckWishlistMissing" style="width:100%;padding:10px;border-radius:10px;margin:6px 0 4px;font-size:13px;color:var(--accent2);">★ Add ${missingCount} missing card${missingCount===1?'':'s'} to wishlist</button>` : ''}
+    <button class="btn btn-secondary" id="deckCopyList" style="width:100%;padding:10px;border-radius:10px;margin:4px 0 4px;font-size:13px;">📋 Copy deck list as text</button>
     ${groupHtml}
     ${missingRec ? `<div class="deck-section">Recommended additions <span style="color:var(--fg2);font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;">— from outside the Avatar set, manage manually</span></div><div class="deck-cards">${missingRec}</div>` : ''}
     ${deck.strategy ? `<div class="deck-section">Strategy</div><div class="deck-strategy">${escapeHtml(deck.strategy)}</div>` : ''}
@@ -1617,7 +1678,57 @@ function groupByRole(cards) {
   return out;
 }
 
+function deckAsText(deck) {
+  const lines = [];
+  lines.push(`// ${deck.name}`);
+  if (deck.format === 'commander') lines.push(`// Commander · ${deck.cards.find(c => c.role === 'commander')?.name || '?'}`);
+  if (deck.vibe && deck.vibe !== 'auto') lines.push(`// Vibe: ${deck.vibe}`);
+  if (deck.theme) lines.push(`// Theme: ${deck.theme}`);
+  lines.push('');
+
+  if (deck.format === 'commander') {
+    const cmdr = (deck.cards || []).find(c => c.role === 'commander');
+    if (cmdr) {
+      lines.push('Commander');
+      lines.push(`1 ${cmdr.name}`);
+      lines.push('');
+      lines.push('Deck');
+    }
+    for (const c of deck.cards || []) {
+      if (c.role === 'commander') continue;
+      lines.push(`${c.count || 1} ${c.name}`);
+    }
+  } else {
+    lines.push('Deck');
+    for (const c of deck.cards || []) {
+      lines.push(`${c.count || 1} ${c.name}`);
+    }
+  }
+
+  if ((deck.missing_recommended || []).length) {
+    lines.push('');
+    lines.push('// Recommended additions (outside Avatar set)');
+    for (const m of deck.missing_recommended) lines.push(`// 1 ${m.name}  — ${m.reason || ''}`);
+  }
+
+  return lines.join('\n');
+}
+
+async function copyDeckList(deck) {
+  const text = deckAsText(deck);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Deck list copied to clipboard');
+  } catch (e) {
+    // Fallback for browsers without clipboard API: show in a prompt for manual copy
+    window.prompt('Copy this deck list:', text);
+  }
+}
+
 function wireDeckResultButtons(deck, unsaved) {
+  const copyBtn = document.getElementById('deckCopyList');
+  if (copyBtn) copyBtn.addEventListener('click', () => copyDeckList(deck));
+
   const wishBtn = document.getElementById('deckWishlistMissing');
   if (wishBtn) {
     wishBtn.addEventListener('click', () => {
