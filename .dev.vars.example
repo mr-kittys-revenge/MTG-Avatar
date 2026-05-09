@@ -1,0 +1,8 @@
+# Copy to .dev.vars (gitignored) for local Cloudflare Pages dev.
+# Used by `wrangler pages dev .`
+#
+# Production values are set in Cloudflare dashboard → Pages → Settings → Environment variables.
+
+SHARED_PASSWORD=changeme
+GEMINI_API_KEY=AIza-your-key-here
+GEMINI_MODEL=gemini-2.5-flash

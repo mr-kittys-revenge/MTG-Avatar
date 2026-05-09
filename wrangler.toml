@@ -1,0 +1,27 @@
+# Wrangler config — only used for local Cloudflare Pages dev.
+#
+# Production bindings (KV namespace, env secrets) are configured in the
+# Cloudflare Pages dashboard, NOT here. This file is just so `wrangler pages dev`
+# can simulate them locally.
+#
+# To run locally with the Functions enabled:
+#   npm install -g wrangler        # one-time
+#   wrangler pages dev .           # starts on http://localhost:8788
+#
+# Local dev uses a fake KV (in-memory) and reads SHARED_PASSWORD / GEMINI_API_KEY
+# from environment variables — NOT this file. Do NOT commit secrets here.
+
+name = "mtg-avatar-tracker"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "."
+
+# Local KV binding for `wrangler pages dev`. The actual production KV namespace
+# is created and bound in the Cloudflare dashboard (Settings → Functions → KV).
+[[kv_namespaces]]
+binding = "COLLECTION"
+id = "local-dev-only-replace-with-real-id"
+
+# Local-only environment defaults. In production, set these as secrets in the
+# Cloudflare Pages dashboard (Settings → Environment variables).
+[vars]
+GEMINI_MODEL = "gemini-2.5-flash"

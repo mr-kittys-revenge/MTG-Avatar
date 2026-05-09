@@ -2,6 +2,18 @@
 
 Mobile-friendly tracker for the Avatar Universes Beyond MTG set. **937 unique printings** across 9 sub-sets (main, eternal, promos, jumpstart, art series, tokens, beginner box).
 
+Production deploy lives at **https://mtg.franklinmerritt.com** (after Cloudflare setup).
+See **[CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md)** for first-time deployment.
+
+## Phase 3 (done) — Cloudflare backend + shared sync
+
+- **Shared cloud datastore**: collection state lives in Cloudflare KV; both partners see the same counts on every device
+- **Server-side Gemini**: API key is a Cloudflare secret, never exposed to the client. The Worker proxies camera-scan and explain calls.
+- **Password gate**: single shared password for the household (set in Cloudflare env vars)
+- **Optimistic UI**: +1 / wishlist toggles update instantly, sync to server in the background, indicator shows status
+- **Periodic resync**: every 30s when the app is foreground (and on app focus), pulls partner's latest changes
+- **Offline-tolerant**: cached collection in localStorage shows immediately; writes during a network glitch save locally and you'll see an "Offline · changes saved locally" indicator
+
 ## Phase 1 (done) — local tracker
 
 - Card grid with images, search, filters, and sort
