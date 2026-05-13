@@ -194,16 +194,31 @@
   /* Scan overlay */
   .scan-screen { position: fixed; inset: 0; background: #000; z-index: 150; overflow: hidden; }
   .scan-screen video { width: 100%; height: 100%; object-fit: cover; }
+  /* Soft full-frame indicator rather than a portrait-shaped box that
+     fights horizontal layouts of multiple cards. Subtle so the user
+     can frame however they like (portrait stack or landscape spread). */
   .scan-frame { position: absolute; inset: 0; pointer-events: none; }
-  .scan-frame::before { content: ""; position: absolute; left: 8%; right: 8%; top: 18%; bottom: 22%; border: 2px dashed rgba(255, 180, 84, 0.7); border-radius: 18px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.35); }
+  .scan-frame::before { content: ""; position: absolute; inset: 6%; border: 2px dashed rgba(255, 180, 84, 0.35); border-radius: 14px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.15); }
   .scan-top { position: absolute; top: calc(12px + var(--safe-top)); left: 12px; right: 12px; display: flex; gap: 12px; align-items: center; z-index: 10; }
   .scan-hint { background: rgba(0,0,0,0.7); color: #fff; padding: 6px 10px; border-radius: 999px; font-size: 12px; backdrop-filter: blur(8px); flex: 1; text-align: center; }
-  .scan-toggles { position: absolute; left: 12px; right: 12px; bottom: 110px; display: flex; gap: 8px; justify-content: center; z-index: 10; }
+  .scan-toggles { position: absolute; left: 12px; right: 12px; bottom: 110px; display: flex; gap: 8px; justify-content: center; z-index: 10; flex-wrap: wrap; }
   .tog { background: rgba(0,0,0,0.7); color: #fff; padding: 6px 12px; border-radius: 999px; font-size: 12px; backdrop-filter: blur(8px); display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
   .tog input { margin: 0; accent-color: var(--accent); }
   .tog:has(input:checked) { background: var(--accent); color: #1a1d23; font-weight: 600; }
   .scan-bottom { position: absolute; left: 0; right: 0; bottom: calc(20px + var(--safe-bot)); display: flex; justify-content: center; z-index: 10; }
   .shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff; border: 4px solid rgba(255,255,255,0.5); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+
+  /* Landscape: move toggles to the right side, shutter to the right edge,
+     so the full width of the frame is free for spread-out cards. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .scan-frame::before { inset: 4%; }
+    .scan-top { left: 10px; right: 110px; top: 10px; }
+    .scan-hint { font-size: 11px; padding: 4px 8px; }
+    .scan-toggles { right: 100px; bottom: auto; left: auto; top: 60px; flex-direction: column; align-items: flex-end; max-width: 130px; }
+    .scan-bottom { left: auto; right: 12px; bottom: 50%; transform: translateY(50%); }
+    .shutter { width: 60px; height: 60px; }
+    .scan-result { left: 12px; right: 110px; bottom: 12px; max-height: 50vh; overflow-y: auto; }
+  }
   .shutter:active { transform: scale(0.95); background: var(--accent); }
   .shutter:disabled { opacity: 0.5; }
   .shutter.auto-on { background: var(--accent); border-color: var(--accent); animation: autoPulse 1.5s ease-in-out infinite; }
