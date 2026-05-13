@@ -1277,7 +1277,14 @@ async function openScan() {
   scanHint.textContent = 'Frame the card. Tap shutter to identify.';
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 2560 },
+        height: { ideal: 1440 },
+        // Some phones expose a 4K back camera — let's get the most detail we can
+        // for multi-card scans. iOS / Android will fall back to whatever the
+        // device actually supports.
+      },
       audio: false,
     });
     scanVideo.srcObject = scanStream;

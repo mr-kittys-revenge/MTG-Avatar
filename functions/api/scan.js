@@ -2,23 +2,30 @@
 //
 // Env: GEMINI_API_KEY (required), GEMINI_MODEL (optional, defaults to gemini-2.5-flash)
 
-const IDENTIFY_PROMPT = `You are looking at a photo containing one OR MORE Magic: The Gathering cards from the "Avatar: The Last Airbender" Universes Beyond release. The cards may be fanned out, stacked partially, or laid in a grid.
+const IDENTIFY_PROMPT = `You are looking at a photo containing one OR MORE Magic: The Gathering cards from the "Avatar: The Last Airbender" Universes Beyond release. Cards may be fanned, side-by-side, in a grid, or stacked with overlap.
 
-Identify EVERY card you can see, even if partially obscured. For each, read:
-- name: the card's printed title (string)
-- set_code: the 3-4 letter set code shown at the bottom of the card. Possible values: "TLA", "TLE", "PTLA", "JTLA", "ATLA", "ATLE", "TTLA", "TTLE", "FTLA". Return uppercase. Use null if you can't read it.
-- collector_number: the printed collector number from the bottom of the card (e.g. "0123/394" → return "123"). Just the number portion as a string, leading zeros stripped. Use null if unreadable.
-- treatment: brief description if special (e.g., "borderless", "showcase", "extended art", "anime", "etched foil"), or null for standard.
-- confidence: "high", "medium", or "low".
+PROCEDURE:
+1. First, scan the entire image and count how many DISTINCT card rectangles you can see. Pay attention to small cards in the corners and partially overlapped cards — don't miss any.
+2. For EACH card rectangle, zoom your attention to read:
+   - The title at the top
+   - The set code (small text bottom-left or bottom-center). Allowed values: TLA, TLE, PTLA, JTLA, ATLA, ATLE, TTLA, TTLE, FTLA.
+   - The collector number (small number near the set code, e.g. "0123/394" — extract just "123")
+   - Any special treatment (borderless, showcase, extended art, anime, etched-foil printing)
+3. Output ALL of them in a single JSON object.
 
-Return ONLY a JSON object of this exact shape:
+OUTPUT (ONLY this JSON, no markdown, no commentary):
 {
   "cards": [
-    { "name": "...", "set_code": "...", "collector_number": "...", "treatment": null, "confidence": "high" }
+    { "name": "...", "set_code": "TLA", "collector_number": "123", "treatment": null, "confidence": "high" }
   ]
 }
 
-If you can read only one card, return an array with one element. If the photo doesn't appear to contain any MTG card, return { "cards": [] }. No markdown, no commentary.`;
+Rules:
+- ALWAYS use the "cards" array, even for a single card or for zero cards.
+- For each field you can't read clearly, use null and lower the confidence.
+- Set code and collector number are critical — they uniquely identify the printing. Try hard to read them.
+- If a card is partially obscured by another, still report what you can see.
+- Don't invent cards that aren't actually visible.`;
 
 export async function onRequestPost({ request, env }) {
   if (!env.GEMINI_API_KEY) return json({ error: 'server not configured: GEMINI_API_KEY missing' }, 500);
