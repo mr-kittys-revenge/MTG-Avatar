@@ -27,11 +27,18 @@ async function apiFetch(path, opts = {}) {
     let msg = `HTTP ${res.status}`;
     try {
       const j = await res.json();
-      // Combine error + detail so the client sees the *actual* reason,
-      // not just a generic 'gemini error' label.
       const parts = [j.error, j.detail].filter(Boolean);
       if (parts.length) msg = parts.join(' · ');
       else msg = `HTTP ${res.status}`;
+
+      // Friendly hints for common misconfigurations
+      if (/live-preview|not supported for generateContent/i.test(msg)) {
+        msg += '\n\n💡 Hint: a Live API model (with "-live-" in its name) is set as GEMINI_MODEL or GEMINI_MODEL_SMART. Live models only work over WebSocket. Set GEMINI_MODEL=gemini-2.5-flash and GEMINI_MODEL_SMART=gemini-2.5-pro in Cloudflare, then retry the deployment.';
+      } else if (/quota|RESOURCE_EXHAUSTED/i.test(msg)) {
+        msg += '\n\n💡 Hint: Gemini free-tier quota reached. Wait for daily reset, switch to gemini-2.5-flash-lite (higher free quota), or enable billing at aistudio.google.com.';
+      } else if (/API[_ ]?key/i.test(msg) && /invalid/i.test(msg)) {
+        msg += '\n\n💡 Hint: GEMINI_API_KEY env var is wrong or revoked. Generate a new one at aistudio.google.com/apikey and update Cloudflare.';
+      }
     } catch {}
     throw new Error(msg);
   }
@@ -550,8 +557,10 @@ function showSheet(el) {
   sheetBg.classList.add('show');
 }
 function hideSheets() {
-  document.getElementById('sheet').classList.remove('show');
-  document.getElementById('moreSheet').classList.remove('show');
+  // Remove .show from every bottom sheet, not just the two I originally
+  // hardcoded. Was leaving Settings / Bulk / Decks / deck-form sheets
+  // visible-but-clickable after they "closed."
+  document.querySelectorAll('.sheet.show').forEach(el => el.classList.remove('show'));
   sheetBg.classList.remove('show');
 }
 
