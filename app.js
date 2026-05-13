@@ -25,7 +25,14 @@ async function apiFetch(path, opts = {}) {
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { const j = await res.json(); msg = j.error || j.detail || msg; } catch {}
+    try {
+      const j = await res.json();
+      // Combine error + detail so the client sees the *actual* reason,
+      // not just a generic 'gemini error' label.
+      const parts = [j.error, j.detail].filter(Boolean);
+      if (parts.length) msg = parts.join(' · ');
+      else msg = `HTTP ${res.status}`;
+    } catch {}
     throw new Error(msg);
   }
   return res.json();
@@ -1428,11 +1435,18 @@ function showScanError(msg) {
   scanResult.classList.add('error');
   scanResult.innerHTML = `
     <h4 style="color:#ffaaaa;">Error</h4>
-    <div style="font-size: 13px;">${escapeHtml(msg)}</div>
-    <div class="actions"><button id="srDismiss">Dismiss</button></div>
+    <div style="font-size: 12px; line-height: 1.4; word-break: break-word; max-height: 200px; overflow-y: auto; font-family: ui-monospace, monospace; background: rgba(0,0,0,0.3); padding: 6px 8px; border-radius: 6px;">${escapeHtml(msg)}</div>
+    <div class="actions">
+      <button id="srCopy">Copy error</button>
+      <button id="srDismiss">Dismiss</button>
+    </div>
   `;
   document.getElementById('srDismiss').addEventListener('click', () => {
     scanResult.classList.add('hidden'); scanResult.classList.remove('error');
+  });
+  document.getElementById('srCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(msg); toast('Error copied'); }
+    catch { window.prompt('Copy this error:', msg); }
   });
 }
 
