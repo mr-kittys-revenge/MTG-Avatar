@@ -1306,7 +1306,10 @@ function closeScan() {
   }
 }
 
-function captureFrameAsJpeg(maxDim = 1280, quality = 0.85) {
+function captureFrameAsJpeg(maxDim = 1920, quality = 0.88) {
+  // Higher default than v1 (1280 → 1920) because Gemini needs to read tiny
+  // collector numbers when multiple cards are in frame. Each card may only
+  // occupy ~25% of the width when 4 are fanned out.
   const v = scanVideo;
   if (!v.videoWidth) throw new Error('Camera not ready');
   const scale = Math.min(1, maxDim / Math.max(v.videoWidth, v.videoHeight));
