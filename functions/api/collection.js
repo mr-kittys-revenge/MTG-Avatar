@@ -9,19 +9,32 @@
 //   DELETE /api/collection                → { ok, version }            (clear all)
 
 const KEY = 'collection';
-const META = 'collection_meta';
+const META = 'collection_meta';   // legacy — only read for migration
 
+// Storage layout (current):
+//   collection → { version, updatedAt, entries: { <card_id>: {...} } }
+//
+// Legacy layout (pre-Phase 6.3) used a separate `collection_meta` key,
+// doubling KV writes per edit. We migrate on read.
 async function loadAll(env) {
-  const data = (await env.COLLECTION.get(KEY, { type: 'json' })) || {};
+  const doc = await env.COLLECTION.get(KEY, { type: 'json' });
+  if (doc && doc.entries) {
+    return { data: doc.entries, meta: { version: doc.version || 0, updatedAt: doc.updatedAt || null } };
+  }
+  // Legacy migration path
+  const data = doc || {};
   const meta = (await env.COLLECTION.get(META, { type: 'json' })) || { version: 0, updatedAt: null };
   return { data, meta };
 }
 
 async function saveAll(env, data) {
-  const meta = (await env.COLLECTION.get(META, { type: 'json' })) || { version: 0 };
-  const next = { version: (meta.version || 0) + 1, updatedAt: new Date().toISOString() };
-  await env.COLLECTION.put(KEY, JSON.stringify(data));
-  await env.COLLECTION.put(META, JSON.stringify(next));
+  // Read current version to increment. Single KV read.
+  const cur = await env.COLLECTION.get(KEY, { type: 'json' });
+  const prevVersion = cur && typeof cur.version === 'number' ? cur.version : 0;
+  const next = { version: prevVersion + 1, updatedAt: new Date().toISOString() };
+  const doc = { version: next.version, updatedAt: next.updatedAt, entries: data };
+  // Single KV write — combined doc replaces the old two-key write.
+  await env.COLLECTION.put(KEY, JSON.stringify(doc));
   return next;
 }
 

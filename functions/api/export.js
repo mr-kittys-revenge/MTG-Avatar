@@ -4,17 +4,25 @@
 // GitHub Actions backup workflow.
 
 export async function onRequestGet({ env }) {
-  const [collection, decks, meta] = await Promise.all([
+  const [collDoc, decks, legacyMeta] = await Promise.all([
     env.COLLECTION.get('collection', { type: 'json' }),
     env.COLLECTION.get('decks', { type: 'json' }),
-    env.COLLECTION.get('collection_meta', { type: 'json' }),
+    env.COLLECTION.get('collection_meta', { type: 'json' }), // legacy fallback
   ]);
+  // Handle both new combined doc and legacy two-key layout
+  let collection = {}, meta = legacyMeta || {};
+  if (collDoc && collDoc.entries) {
+    collection = collDoc.entries;
+    meta = { version: collDoc.version, updatedAt: collDoc.updatedAt };
+  } else if (collDoc) {
+    collection = collDoc;
+  }
   const payload = {
     version: 2,
     exportedAt: new Date().toISOString(),
-    collection: collection || {},
+    collection,
     decks: decks || {},
-    meta: meta || {},
+    meta,
   };
   const date = new Date().toISOString().slice(0, 10);
   return new Response(JSON.stringify(payload, null, 2), {

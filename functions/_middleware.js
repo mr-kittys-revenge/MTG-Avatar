@@ -43,45 +43,12 @@ async function handleRequest(context) {
     return json({ error: 'unauthorized' }, 401, request);
   }
 
-  // Rate limit Gemini-touching endpoints. Best-effort only — if the KV
-  // write fails (e.g., the 1-write-per-second-per-key cap fires when
-  // both devices burst at the same minute) we silently skip enforcement
-  // rather than 500ing the whole request.
-  const path = url.pathname;
-  if (path === '/api/scan' || path === '/api/explain' || path === '/api/deck-build') {
-    if (env.COLLECTION) {
-      try {
-        const minute = Math.floor(Date.now() / 60000);
-        // Shard the counter key across a few buckets so concurrent writes
-        // don't all land on the same KV key. We still get an approximate
-        // global count by reading all shards.
-        const shards = 4;
-        const shard = Math.floor(Math.random() * shards);
-        const limit = parseInt(env.GEMINI_RATE_LIMIT) || 60;
-
-        // Quick aggregate read — counts across shards
-        const reads = await Promise.all(
-          Array.from({ length: shards }, (_, i) =>
-            env.COLLECTION.get(`ratelimit:gemini:${minute}:${i}`).then(v => parseInt(v) || 0)
-          )
-        );
-        const total = reads.reduce((a, b) => a + b, 0);
-        if (total >= limit) {
-          return json({ error: `rate limit ${limit}/min exceeded — try again shortly` }, 429, request);
-        }
-
-        // Increment our chosen shard. Wrapped in its own try so a per-key
-        // write throttle doesn't break the request.
-        const shardKey = `ratelimit:gemini:${minute}:${shard}`;
-        const cur = reads[shard];
-        env.COLLECTION.put(shardKey, String(cur + 1), { expirationTtl: 120 })
-          .catch(() => { /* best-effort */ });
-      } catch (e) {
-        // Never block a request because of rate-limit machinery failing.
-        console.log('[ratelimit] skipped:', e?.message);
-      }
-    }
-  }
+  // Rate limiting now relies on Gemini's own API quota as the ceiling.
+  // We previously implemented a KV-backed per-minute counter here, but it
+  // burned through the Cloudflare free-tier KV write budget (1k/day)
+  // faster than it provided value. If you need true rate limiting later,
+  // use Cloudflare's Workers Rate Limiting API or move to a paid plan
+  // with Durable Objects.
 
   const res = await next();
   return withCors(res, request);
