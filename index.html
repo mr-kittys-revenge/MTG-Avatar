@@ -206,6 +206,8 @@
   .shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff; border: 4px solid rgba(255,255,255,0.5); box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
   .shutter:active { transform: scale(0.95); background: var(--accent); }
   .shutter:disabled { opacity: 0.5; }
+  .shutter.auto-on { background: var(--accent); border-color: var(--accent); animation: autoPulse 1.5s ease-in-out infinite; }
+  @keyframes autoPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
   .scan-busy { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 20; color: #fff; font-size: 14px; }
   .scan-result { position: absolute; left: 12px; right: 12px; bottom: calc(110px + var(--safe-bot)); background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 12px; z-index: 15; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
   .scan-result h4 { margin: 0 0 6px; font-size: 12px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -513,6 +515,9 @@
     </label>
     <label class="tog">
       <input type="checkbox" id="scanRapid" checked><span>Keep open</span>
+    </label>
+    <label class="tog">
+      <input type="checkbox" id="scanAuto"><span>Auto</span>
     </label>
   </div>
   <div class="scan-bottom">

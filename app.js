@@ -1225,6 +1225,47 @@ document.getElementById('scanBtn').addEventListener('click', openScan);
 document.getElementById('scanClose').addEventListener('click', closeScan);
 scanShoot.addEventListener('click', captureAndIdentify);
 
+// Auto-scan loop: tick every AUTO_SCAN_INTERVAL_MS while toggle is on,
+// skip if a previous identify is in flight or the result UI is showing.
+const AUTO_SCAN_INTERVAL_MS = 1500;
+let autoScanTimer = null;
+let autoScanBusy = false;
+
+const scanAutoToggle = document.getElementById('scanAuto');
+scanAutoToggle.addEventListener('change', () => {
+  if (scanAutoToggle.checked) {
+    startAutoScan();
+    scanShoot.classList.add('auto-on');
+    scanHint.textContent = 'Auto-scan — hold a card in frame, it captures every 1.5s';
+  } else {
+    stopAutoScan();
+    scanShoot.classList.remove('auto-on');
+    scanHint.textContent = 'One card or fan multiple — tap shutter to identify.';
+  }
+});
+
+function startAutoScan() {
+  if (autoScanTimer) return;
+  autoScanTimer = setInterval(autoScanTick, AUTO_SCAN_INTERVAL_MS);
+}
+function stopAutoScan() {
+  if (autoScanTimer) { clearInterval(autoScanTimer); autoScanTimer = null; }
+  autoScanBusy = false;
+}
+
+async function autoScanTick() {
+  if (autoScanBusy) return;
+  // Pause auto-capture while a previous result is awaiting user action,
+  // so we don't trample over their +1 tap with the next frame's matches.
+  if (!scanResult.classList.contains('hidden')) return;
+  if (!scanStream || !scanVideo.videoWidth) return;
+  autoScanBusy = true;
+  try {
+    await captureAndIdentify();
+  } catch {}
+  autoScanBusy = false;
+}
+
 async function openScan() {
   if (!getPassword()) {
     toast('Sign in first');
@@ -1248,6 +1289,7 @@ async function openScan() {
 }
 
 function closeScan() {
+  stopAutoScan();
   if (scanStream) {
     scanStream.getTracks().forEach(t => t.stop());
     scanStream = null;
@@ -1256,6 +1298,12 @@ function closeScan() {
   scanScreen.classList.add('hidden');
   scanResult.classList.add('hidden');
   scanBusy.classList.add('hidden');
+  scanShoot.classList.remove('auto-on');
+  // Reset the auto toggle so re-opening the scanner starts fresh
+  if (scanAutoToggle.checked) {
+    scanAutoToggle.checked = false;
+    scanHint.textContent = 'One card or fan multiple — tap shutter to identify.';
+  }
 }
 
 function captureFrameAsJpeg(maxDim = 1280, quality = 0.85) {
@@ -1286,11 +1334,20 @@ async function captureAndIdentify() {
     if (ident && Array.isArray(ident.cards)) identifiedList = ident.cards;
     else if (ident && (ident.name || ident.set_code)) identifiedList = [ident];
 
+    // In auto-scan mode, suppress the 'No match' UI — just keep looping.
+    // This lets the user wave cards through the frame without each empty
+    // beat-between-cards triggering a dismiss prompt.
+    const inAutoMode = scanAutoToggle && scanAutoToggle.checked;
+
     if (identifiedList.length === 0) {
-      showScanResult([], null);
+      if (!inAutoMode) showScanResult([], null);
     } else if (identifiedList.length === 1) {
       const matches = matchCard(identifiedList[0]);
-      showScanResult(matches, identifiedList[0]);
+      if (matches.length === 0 && inAutoMode) {
+        // Couldn't resolve to a real card; keep looping
+      } else {
+        showScanResult(matches, identifiedList[0]);
+      }
     } else {
       showMultiScanResult(identifiedList);
     }
