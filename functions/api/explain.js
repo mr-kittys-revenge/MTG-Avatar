@@ -3,7 +3,15 @@
 // `card` is the slim card object from cards.json.
 // `followup` is an optional string question for a follow-up exchange.
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost(context) {
+  try { return await handleExplain(context); }
+  catch (e) {
+    console.log('[explain] unhandled:', e?.message, e?.stack);
+    return json({ error: 'server crashed in /api/explain', detail: e?.message }, 500);
+  }
+}
+
+async function handleExplain({ request, env }) {
   if (!env.GEMINI_API_KEY) return json({ error: 'server not configured: GEMINI_API_KEY missing' }, 500);
 
   let body;
@@ -37,7 +45,9 @@ export async function onRequestPost({ request, env }) {
     return json({ error: 'gemini error', detail }, 502);
   }
 
-  const data = await res.json();
+  let data;
+  try { data = await res.json(); }
+  catch (e) { return json({ error: 'gemini response was not JSON', detail: e?.message }, 502); }
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('\n') || '';
   return json({ text });
 }

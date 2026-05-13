@@ -27,7 +27,15 @@ Rules:
 - If a card is partially obscured by another, still report what you can see.
 - Don't invent cards that aren't actually visible.`;
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost(context) {
+  try { return await handleScan(context); }
+  catch (e) {
+    console.log('[scan] unhandled:', e?.message, e?.stack);
+    return json({ error: 'server crashed in /api/scan', detail: e?.message }, 500);
+  }
+}
+
+async function handleScan({ request, env }) {
   if (!env.GEMINI_API_KEY) return json({ error: 'server not configured: GEMINI_API_KEY missing' }, 500);
 
   let body;
@@ -66,7 +74,9 @@ export async function onRequestPost({ request, env }) {
     return json({ error: 'gemini error', detail }, 502);
   }
 
-  const data = await res.json();
+  let data;
+  try { data = await res.json(); }
+  catch (e) { return json({ error: 'gemini response was not JSON', detail: e?.message }, 502); }
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('\n') || '';
 
   let parsed = null;

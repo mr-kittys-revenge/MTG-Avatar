@@ -4,7 +4,15 @@
 // `owned` is a compact array of card summaries provided by the client (the client already
 // has the catalog; sending the slim list keeps the prompt tight).
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost(context) {
+  try { return await handleDeckBuild(context); }
+  catch (e) {
+    console.log('[deck-build] unhandled:', e?.message, e?.stack);
+    return json({ error: 'server crashed in /api/deck-build', detail: e?.message }, 500);
+  }
+}
+
+async function handleDeckBuild({ request, env }) {
   if (!env.GEMINI_API_KEY) return json({ error: 'server not configured: GEMINI_API_KEY missing' }, 500);
 
   let body;
@@ -42,7 +50,9 @@ export async function onRequestPost({ request, env }) {
     try { const j = await res.json(); detail = j?.error?.message || detail; } catch {}
     return json({ error: 'gemini error', detail }, 502);
   }
-  const data = await res.json();
+  let data;
+  try { data = await res.json(); }
+  catch (e) { return json({ error: 'gemini response was not JSON', detail: e?.message }, 502); }
   const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('\n') || '';
 
   let parsed = null;
